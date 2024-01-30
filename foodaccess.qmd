@@ -1,0 +1,2659 @@
+---
+author: "Allison Bauman"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
+```
+
+# Nutrition Security and Food Access
+
+The Local and Regional Food Systems Data Warehouse contains data indicators related to [nutrition security and food access](https://localfoodeconomics.com/wp-content/uploads/2022/10/Nutrition-Security-and-Food-Access-Brief_final.pdf) that can help researchers, practitioners, and policymakers better understand which households and communities have reliable access to nutritious and affordable food, and where access might be limited.
+
+Data include:
+
+-   Federal nutrition assistance program data, which document eligibility and participation in federal nutrition assistance programs. Data may be used to understand areas where program eligibility and participation is highest and where rates can be improved.
+-   Food purchase data, which document household food acquisition- including types of food purchased and sources of payment. Data may be used to understand how household income influences food shopping behavior.
+-   Food store data, which document access to grocery stores, types of food retail in communities, and store acceptance of WIC and SNAP. Data may be used to understand where areas of low supermarket access exist, how access to transportation impacts food purchasing, and where there are opportunities for increased food sources.
+-   Food preparation data, which document household access to kitchen equipment, time spent on food preparation, and time spent commuting and working outside the home. Data may be used to understand which households lack the time and equipment often needed to prepare nutritious meals.
+-   Food insecurity data, which document rates of food insecurity among households and special populations. Data may be used to understand how food insecurity rates vary by age, race, and geography.
+-   Population characteristic data, which document income level, disability status, households with children, older adults, and school enrollment, and other factors that impact eligibility for federal nutrition assistance programs.
+
+Not all households have the same opportunities to make healthy food choices.
+
+Black, Indigenous, and People of Color households are disproportionately affected by barriers to nutrition and food access which can result from community conditions whereby neighborhoods lack healthy food retail, public transit, and well-funded public school systems; working conditions whereby wages are low, hours are long, and places of employment lack healthy food options; generational wealth gaps whereby high rental housing costs and low savings rates make it difficult to weather financial emergencies; or discrimination by social service providers, whereby households are denied enrollment in income and food subsidy programs.
+
+Site users are encouraged to acknowledge the systemic factors that influence household nutrition and food access, and to seek out opportunities to support policy and program changes that improve access for all households. When presenting data, we encourage disaggregation by individual race, ethnicity, and cultural group wherever possible. Aggregation of data can mask important differences that might be relevant for understanding needs and crafting adequate program and policy solutions. We also encourage the use of practices that invite community members to help contextualize data, share their personal stories, and amplify community solutions.
+
+## State and county data
+
+We use [tidycensus](https://walker-data.com/tidycensus/) to get state and county names by FIPS so they are uniform across all data sets.
+
+In the tidycensus data, there is no data for FIPS 02010 Aleutian Islands Census Area, Alaska. This FIPS is found in the Census of Agriculture. We add this fips to our county data based on the [Geographic Area Codes and Titles from the U.S. Bureau of Labor Statistics](https://www.bls.gov/cew/classifications/areas/qcew-area-titles.htm).
+
+```{r}
+library(tidyverse, quietly = TRUE)
+library(janitor, quietly = TRUE)
+
+# Get county and state fips, state name, county name 
+county <- tidycensus::fips_codes %>% 
+  unite("fips", 
+        c(state_code, county_code), 
+        sep = "", remove = FALSE) %>% 
+  rename(county_name = county) %>% 
+  select(fips, county_name, state_name)
+
+# Add 02010 Aleutian Islands Census Area, Alaska
+county <- county %>% 
+  add_row(fips = "02010", 
+          county_name = "Aleutian Islands Census Area", 
+          state_name = "Alaska", 
+          .after = 67)
+
+# Get state data and add "00" US
+state <- tidycensus::fips_codes %>% 
+  select(state_code, state_name) %>% 
+  rename(fips = state_code) %>% 
+  distinct() %>% 
+  add_row(fips = "00", state_name = "US")
+
+# Merge so we have county and state data in one data frame
+county_state <- bind_rows(county, state)
+
+# Manually add US as fips "00"
+county_state <- county_state %>% 
+  add_row(fips = "00", 
+          county_name = NA, 
+          state_name = "US")
+
+```
+
+## SNAP participation
+
+We collect data on [U.S. Department of Agriculture, Food and Nutrition Service, Supplemental Nutrition Assistance Program (SNAP) participation rates, by state](https://www.fns.usda.gov/usamap). These data are not available at the county level from this source. We gather all available data from this source: fiscal year 2018, 2019, and 2020. National data shows on the map for "all eligible people" in fiscal years 2018, 2019 but is not part of the downloadable data; these are added manually.
+
+Data is missing for Guam and Virgin Islands.
+
+After selecting the data of interest, click on "More options" and select "Export to CSV" to download data. Data is exported from the website with the same file name, so years are added manually.
+
+```{r}
+
+# Import and bind data in one data frame, add file name to indicate year
+file_list <- fs::dir_ls(path = "data_raw/foodaccess/FNS")
+
+df <- file_list %>% 
+  map(~read_csv(.,show_col_types = FALSE)) %>%
+  bind_rows(.id = "year") %>% 
+  mutate(
+    year = str_remove(year, "data_raw/foodaccess/FNS/SNAP-state-rates_"), 
+    year = str_remove(year, ".csv")) %>% 
+  clean_names() %>% 
+  rename(state_name = state)
+
+# Manually add US data 
+df <- df %>% 
+  add_row(
+    year = "2018", 
+    state_name = "US", 
+    all_eligible_people = 82) %>% 
+  add_row(
+    year = "2019", 
+    state_name = "US", 
+    all_eligible_people = 82)
+
+# Add state fips code, rename Virgin Island, U.S. Virgin Islands to match with all other data
+df <- df %>% 
+  mutate(
+    state_name = case_when(
+      state_name=="Virgin Islands" ~ "U.S. Virgin Islands", 
+      TRUE ~ state_name)) %>%
+  left_join(state)
+
+# Pivot longer 
+df <- df %>% 
+  pivot_longer(
+    cols = !c(fips, year, state_name),
+    names_to = "variable_name",
+    values_to = "value")
+
+# Add snap to beginning of variable name and percent to end and divide percent by 100
+df <- df %>% 
+  mutate(
+    variable_name = str_c("snap_", variable_name), 
+    variable_name = str_c(variable_name, "_percent"), 
+    value = value/100)
+
+# Add variables 
+df <- df %>% 
+  mutate(
+    county_name = NA, 
+    category = "Food Access", 
+    topic_area = "Federal Nutrition Program", 
+    value_codes = NA, 
+    county_type = NA) %>% 
+  select(
+    fips, county_name, state_name, 
+    category, topic_area, 
+    year, variable_name, value, value_codes, county_type)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- df %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# Create metadata 
+meta <- df %>% 
+  bind_cols(years) %>%
+  group_by(category, topic_area, variable_name) %>% 
+  count() %>% 
+  select(-n) %>% 
+    mutate(
+    user_friendly_variable_name = case_when(
+      variable_name == "snap_all_eligible_people_percent" ~ 
+        "SNAP participation rates, all eligible people",
+      variable_name == "snap_elderly_people_percent" ~ 
+        "SNAP participation rates, elderly people", 
+      variable_name == "snap_working_poor_people_percent" ~ 
+        "SNAP participation rates, working poor people"),
+    variable_definition = case_when(  
+      variable_name == "snap_all_eligible_people_percent" ~ 
+        "Percent of eligible people participating in SNAP",
+      variable_name == "snap_elderly_people_percent" ~ 
+        "Percent of elderly people participating in SNAP", 
+      variable_name == "snap_working_poor_people_percent" ~ 
+        "Percent of working poor people participating in SNAP"),
+    years = "2018|2019|2020", 
+    periodicity = "yearly",
+    aggregation	= "percent",
+    format = "percent",
+    keywords = "USDA|FNS|Food and Nutrition Services|Food stamps", 
+    hashtags = "#foodstamps|#getSNAP|#snapmatters|#ebt|#SNAPbenefits", 
+    chart_type1 = "BarChart", 
+    chart_type2	= "LineChartSeries", 
+    chart_axis_x1	= "SNAP participation rate",
+    chart_axis_x2	= NA, 
+    chart_axis_y1	= NA, 
+    chart_axis_y2	= chart_axis_x1, 
+    source = "U.S. Department of Agriculture, Food and Nutrition Service, Supplemental Nutrition Assistance Program (SNAP)",
+    url = "https://www.fns.usda.gov/usamap", 
+    citation	= "U.S. Department of Agriculture, Food and Nutrition Service, Supplemental Nutrition Assistance Program (SNAP) participation rates, by state") 
+
+# Define FNS metadata 
+meta_fns <- meta
+df_fns <- df
+
+rm(df, meta)
+```
+
+## SNAP participation by race
+
+We collect county-level data on SNAP participation by race from the [U.S. Census Bureau, American Community Survey, S2201 Food Stamps/Supplemental Nutrition Assistance Program (SNAP)](https://data.census.gov/cedsci/table?q=food%20assistance&tid=ACSST5Y2020.S2201). We gather 5-year estimates from 2012-2022. (Data are available starting in 2010, if you want data from prior years). We select Geography, County, All Counties within the United States and Puerto Rico, and download table data. Data from these tables are available at the US, state, and county levels.
+
+An ''-'' entry in the estimate column indicates that either no sample observations or too few sample observations were available to compute an estimate, or a ratio of medians cannot be calculated because one or both of the median estimates falls in the lowest interval or upper interval of an open-ended distribution. We code this as NA and indicate an "D" in the values_column for not disclosed.
+
+Note, the variable names from 2012-2014 are different than from 2015-2022. Variables include all available data on households receiving SNAP/food stamps by race.
+
+```{r}
+
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_snap")
+
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S2201-Column-Metadata.csv")) %>% 
+  filter(str_detect(Label, 
+                    "RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER|Hispanic or Latino origin")) %>% clean_names()
+
+# Split by years where variable names change 
+meta1214 <- meta %>% 
+  filter(year %in% c("2012", "2013", "2014")) %>%
+  filter(str_detect(label, "Household") & 
+           !str_detect(label, "not") & 
+           !str_detect(label, "Margin")) 
+
+# Define variable name and user friendly variable name
+# Drop race category "one race", and change 2012-2014 to say race alone (e.g., black alone) to match future years
+meta1214 <- meta1214 %>%
+  filter(
+    label != "Households receiving food stamps!!Estimate!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!One race") %>%
+  mutate(
+    label = str_remove(label,
+                 "Households receiving food stamps!!Estimate!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!"), 
+    label = str_remove(label, 
+                       "Households receiving food stamps!!Estimate!!"), 
+    label = case_when(
+      str_detect(label, "One race!!") ~ str_c(label, " alone"), 
+      TRUE ~ label), 
+    label = str_remove(label, 
+               "One race!!"), 
+    label = str_remove(label, 
+                       "Households receiving food stamps/SNAP!!Estimate!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!")) 
+
+# Define metadata for years 2015-2016
+meta1516 <- meta %>% 
+  filter(year %in% c("2015", "2016")) %>% 
+  filter(str_detect(label, "Percent households receiving food stamps/SNAP!!Estimate!!")) %>% 
+  mutate(
+    label = str_remove(label, 
+                       "Percent households receiving food stamps/SNAP!!Estimate!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!"), 
+    label = str_remove(label, 
+                       "Percent households receiving food stamps/SNAP!!Estimate!!"))
+
+# Meta for 2017-2022 
+meta1722 <- meta %>% 
+  filter(year %in% c("2017", "2018", "2019", 
+                     "2020", "2021", "2022")) %>% 
+  filter(str_detect(label, 
+                    "Estimate!!Percent households receiving food stamps/SNAP!!Households!!")) %>% 
+  mutate(label = str_remove(label, 
+                            "Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!"))
+
+# Define all metadata 
+meta <- bind_rows(meta1214, meta1516, meta1722)
+rm(meta1214, meta1516, meta1722)
+
+# Keep metadata for years, variable codes and names to determine vars to keep in df
+metadf <- meta %>% 
+  rename(variable_code = column_name,
+         variable_name = label)
+  
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)    
+
+# Add variables 
+meta <- meta %>% 
+  mutate(
+    label = case_when(
+      str_detect(label, "Two") | 
+        str_detect(label, "Some") ~ tolower(label), 
+      TRUE ~ label), 
+    user_friendly_variable_name = 
+      str_c("SNAP participation rate, ", label), 
+    variable_name = 
+      str_remove(label, " alone"),
+    variable_name = 
+      str_remove(variable_name, " origin \\(of any race\\)"), 
+    variable_name = 
+      tolower(str_replace_all(variable_name, ",", "")), 
+    variable_name = 
+      str_replace_all(variable_name, " ", "_"), 
+    variable_name = 
+      str_c("snap_participation_rate_", variable_name)) %>%
+  rename(variable_code = column_name)
+  
+# Define metadata for acs snap data and add columns
+meta <- meta %>% 
+  mutate(
+    category = "Food Access",
+    topic_area = "Federal Nutrition Program", 
+    variable_definition = 
+      str_c("Percent of eligible ", label, " households participating in SNAP"),
+    years = "2012|2013|2014|2015|2016|2017|2018|2019|2020|2021|2022",
+    periodicity = "yearly", 
+    aggregation = "percent",
+    format = "percent", 
+    keywords = "American Community Survey|ACS|Census Bureau|SNAP", 
+    hashtags = "",
+    chart_type1 = "BarChart", 
+    chart_type2	= "LineChartSeries", 
+    chart_axis_x1	= "SNAP participation rate",
+    chart_axis_x2	= NA, 
+    chart_axis_y1	= NA, 
+    chart_axis_y2	= chart_axis_x1, 
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = 
+      "https://data.census.gov/cedsci/table?q=food%20assistance&tid=ACSST5Y2020.S2201",
+    citation = "U.S. Census Bureau, American Community Survey, S2201 Food Stamps/Supplemental Nutrition Assistance Program (SNAP)") 
+
+# Import data 
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_snap")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S2201-Data.csv"))
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+    fips = case_when(
+      	str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+        str_detect(GEO_ID, "0100000") ~ "00", 
+        str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID)
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# keep variables of interest 
+df <- metadf %>%
+  left_join(df, by = c("year", "variable_code"))
+
+# Convert "-" to NA and add value_codes for data not disclosed ("D")
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value == "-" ~ "D", 
+      TRUE ~ NA),
+    value = case_when(
+      value == "-" ~ NA, 
+      TRUE ~ value), 
+    value = as.numeric(value), 
+    value = value/100)
+
+# Add state and county names 
+df <- df %>% left_join(county_state)
+
+# Add topic area and category and fips
+df <- df %>% 
+  mutate(
+    topic_area = "Federal Nutrition Program", 
+    category = "Food Access") %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# define dataframes
+df_acs_snap <- df
+meta_acs_snap <- meta
+
+rm(df, meta)
+```
+
+## WIC Eligibility and participation rates, state-level
+
+State-level WIC eligibility and participation data is gathered from the [U.S. Department of Agriculture, Food and Nutrition Service, National and State-level estimates of WIC Eligibility and Program Reach in 2021](https://www.fns.usda.gov/research/wic/eligibility-and-program-reach-estimates-2021). We gather all available data, 2016-2021. Data is downloaded from the WIC Eligibility and Participation by State Over Time, 2016--2021 chart by clicking on the download data button at the top of the figure.
+
+Data for the total population, eligible population, participant population, coverage rates, and eligibility rates are each includes on a different sheet. We import population data and compute coverage and eligibility rates.
+
+```{r}
+library(readxl)
+
+# Define data path 
+file_path <- "data_raw/foodaccess/Figure6-trends-in-wic-eligibility-and-participation-by-state.xlsx"
+
+sheet_names = c("Total Population", 
+                "Eligible Population", 
+                "Participant Population")
+
+# Read each sheet of data into a list, pivot longer and add a variable to indicate sheet
+df_list <- sheet_names %>%
+  map(function(sheet){
+    read_xlsx(path = file_path, 
+              sheet = sheet, 
+              range = "A3:G55") %>%
+    pivot_longer(
+      cols = !State, 
+      names_to = "year", 
+      values_to = "value") %>% 
+    mutate(
+      variable = sheet)
+}) 
+
+# Bind all data from list into one data frame
+df <- bind_rows(df_list) %>% 
+  pivot_wider(names_from = variable,
+              values_from = value) %>% 
+  clean_names()
+
+# Add a national total row 
+df_us <- df %>% 
+  group_by(year) %>% 
+  summarise(across(total_population:participant_population, 
+                   ~sum(.))) %>% 
+  mutate(state = "US")
+
+df <- bind_rows(df, df_us)
+rm(df_us)  
+
+# Calculate coverage and eligibility rates and drop original variables
+df <- df %>% 
+  mutate(
+    wic_eligibility_rate = eligible_population/total_population, 
+    wic_coverage_rate = participant_population/eligible_population) %>% 
+  select(state, year, ends_with("_rate"))
+  
+# Add fips
+df <- df %>% 
+  rename(state_name = state) %>%
+  left_join(state) 
+  
+# Pivot longer 
+df <- df %>%
+  pivot_longer(
+    cols = !c(fips, state_name, year), 
+    values_to = "value", 
+    names_to = "variable_name")
+
+# Add variables  
+df <- df %>% 
+  mutate(
+    county_name = NA, 
+    topic_area = "Federal Nutrition Program", 
+    category = "Food Access") %>% 
+  select(
+    fips, county_name, state_name, 
+    category, topic_area, year, variable_name, value)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- df %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# Add metadata 
+meta <- df %>% 
+  bind_cols(years) %>%
+  group_by(category, topic_area, variable_name) %>%
+  count() %>% select(!n) %>%
+  mutate(
+    user_friendly_variable_name = case_when(
+      str_detect(variable_name, "eligibility") ~ "WIC eligibility rate",
+      str_detect(variable_name, "coverage") ~ "WIC coverage rate"), 
+    variable_definition = case_when(  
+      variable_name == "wic_eligibility_rate" ~ "Percent of population who were eligible to participate in WIC", 
+      variable_name == "wic_coverage_rate" ~ "Percent of eligible people who participated in WIC"),
+    years = "2016|2017|2018|2019|2020|2021", 
+    periodicity = "yearly",
+    aggregation	= "percent",
+    format = "percent",
+    keywords = "USDA|FNS|Food and Nutrition Services|Food stamps|WIC|Women", 
+    hashtags = "#WICBreastfeeding|#WICspeaksBF", 
+    chart_type1 = "BarChart", 
+    chart_type2	= "LineChartSeries", 
+    chart_axis_x1	= case_when(
+      variable_name == "wic_eligibility_rate" ~ "WIC eligibility rate", 
+      variable_name == "wic_coverage_rate" ~ "WIC coverage rate"), 
+    chart_axis_x2	= NA, 
+    chart_axis_y1	= NA, 
+    chart_axis_y2	= chart_axis_x1, 
+    source = "U.S. Department of Agriculture, Food and Nutrition Service",
+    url = "https://www.fns.usda.gov/research/wic/eligibility-and-program-reach-estimates-2021", 
+    citation	= "U.S. Department of Agriculture, Food and Nutrition Service, National and State Level Estimates of WIC Eligibility and Program Reach in 2021")
+
+# define file
+meta_wic <- meta
+df_wic <- df
+```
+
+## Food Environment data
+
+Data on the food environment is collected from the [U.S. Department of Agriculture, Economic Research Service, Food Environment Atlas, Food Environment Atlas](https://www.ers.usda.gov/data-products/food-environment-atlas/data-access-and-documentation-downloads). We download the data set called "Food Environment Atlas .csv Files last updated 9/10/2020."
+
+We gather data on food access by race and food stores. We then create an index out of these variables to represent retail density (not including SNAP-authorized stores). This index will be based on the highest number of food stores/1,000 pop (grocery, supercenter, convenience, specialized) in a county. A retail density index of 1 will represent the county in the U.S. with the highest retail density.
+
+We also use data from SupplementalDataState to compute state and national totals for the data that we can.
+
+Data that were not available, not applicable, or suppressed for specific counties are denoted with a blank cell. As we do not have information on suppression, we assume all blank cells are NA.
+
+```{r}
+
+# read in meta data 
+file_path <- "data_raw/foodaccess/FoodEnvironmentAtlas/VariableList.csv"
+meta <- read_csv(file_path) %>% 
+  clean_names()
+
+# Keep variables of interest and change variable name and units
+meta <- meta %>% 
+  filter(
+    (category_code == "ACCESS" & units != "% change") | 
+      (category_code == "STORES" & units != "% change")) %>%
+  mutate(
+    year = str_remove(variable_name, ".*,"),
+    variable_name = 
+      str_replace(variable_name, 
+                  ",[^,]*$", ""), 
+    variable_name = 
+      str_replace(variable_name, 
+                  "\\(%\\)", "percent"), 
+    units = case_when(
+      units == "# per 1,000 pop" ~ "number per 1,000 pop", 
+      TRUE ~ tolower(units)))
+
+# Separate food store and low access data for easier creation of user_friendly_variable_name, we want access to be first and demographics second
+race <- c("White", "Black", "Hispanic ethnicity", 
+                  "Asian", "American Indian or Alaska Native", 
+                  "Hawaiian or Pacific Islander")
+          
+meta1 <- meta %>% 
+  filter(category_code == "ACCESS") %>% 
+  mutate(
+    var1 = str_extract(variable_name, "^[^,]*"),
+    var1 = case_when(
+      var1 %in% race ~ var1, 
+      TRUE ~ tolower(var1)), 
+    var2 = str_remove(variable_name, "^[^,]*"), 
+    var2 = str_to_sentence(str_remove(var2, ", ")), 
+    variable_name = case_when(
+      var2== "" ~ str_to_sentence(var1), 
+      TRUE ~ str_c(var2, var1, sep = ", ")), 
+    variable_name = str_replace(variable_name, 
+                                "store percent", 
+                                "store, percent"))
+
+meta2 <- meta %>% 
+  filter(category_code != "ACCESS") 
+
+meta <- bind_rows(meta1, meta2) 
+rm(meta1, meta2)
+
+# Add variable definition 
+meta <- meta %>% 
+  mutate(
+    variable_name = str_replace(variable_name, 
+                                "&", "and"), 
+    def1 = case_when(
+      units %in% c("count", "number per 1,000 pop") ~ "Number ", 
+      units == "percent" ~ "Percent "), 
+    def2 = case_when(
+      subcategory_name == "Demographics" ~ 
+        "of individuals in a county who are ",
+      subcategory_name == "Overall" ~ 
+        "of people",
+      str_detect(var1, "low income & low access to store") ~ 
+        "of people in a county with low income and living more than 1 mile from a supermarket or large grocery store if in an urban area, or more than 10 miles from a supermarket or large grocery store if in a rural area", 
+      str_detect(var1, "households") ~ 
+        "of housing units in a county without a car and more than 1 mile from
+a supermarket or large grocery store",
+      TRUE ~ NA), 
+    def3 = case_when(
+      	subcategory_name %in% c("Demographics", "Overall") ~ 
+      	  " in a county living more than 1 mile from a supermarket or large grocery store if in an urban area, or more than 10 miles from a supermarket or large grocery store if in a rural area", 
+      	TRUE ~ NA), 
+    variable_definition = case_when(
+      subcategory_name == "Demographics" ~ 
+        str_c(def1, def2, var1, def3), 
+      subcategory_name == "Overall" ~ 
+        str_c(def1, def2, def3), 
+      str_detect(var1, "low income & low access to store") | 
+        str_detect(var1, "households") ~ 
+        str_c(def1, def2),
+      category_name == "Store Availability" ~
+        str_c("Number of ", tolower(variable_name), " in a county")))
+
+# Define axis titles 
+meta <- meta %>% 
+  mutate(
+    axis = str_replace_all(def2, "\\bin\\b.*", ""), 
+    axis = case_when(
+      str_detect(axis, "of housing units") ~ "of housing units",
+      TRUE ~ axis), 
+    axis = case_when(
+      is.na(var1) ~ str_remove(variable_definition, " in a county"), 
+      TRUE ~ str_c(def1, axis, sep = "")))
+
+# Add columns
+meta <- meta %>%
+  mutate(
+    `2 pager title` = "Nutrition Security and Food Access", 
+    user_friendly_variable_name = variable_name,
+    category = case_when(
+      category_code == "ACCESS" ~ "Food Access", 
+      category_code == "STORES" ~ "Food Retail"), 
+    topic_area = "Food Store", 
+    variable_name = tolower(variable_code), 
+    years = case_when(
+      category_code == "ACCESS" ~ "2010|2015", 
+      category_code == "STORES" & 
+        subcategory_name != "SNAP-authorized" ~ "2011|2016", 
+      category_code == "STORES" & 
+        subcategory_name == "SNAP-authorized" ~ "2012|2017"),
+    periodicity = "every five years",
+    aggregation	= units, 
+    format = case_when(
+      units == "percent" ~ "percent", 
+      TRUE ~ "integer"),
+    keywords = "USDA|Food Environment Atlas|Household Resources|Access and Proximity to Grocery Store|Store Availability", 
+    hashtags = "#foodaccess|#foodsecurity|#foodjustice", 
+    chart_type1 = "BarChart", 
+    chart_type2	= "ColumnChart", 
+    chart_axis_x1	= axis, 
+    chart_axis_x2	= NA, 
+    chart_axis_y1	= NA, 
+    chart_axis_y2	= chart_axis_x1, 
+    source = "U.S. Department of Agriculture, Economic Research Service, Food Environment Atlas, Food Environment Atlas",
+    url = "https://www.ers.usda.gov/data-products/food-environment-atlas/data-access-and-documentation-downloads", 
+    citation	= "U.S. Department of Agriculture, Economic Research Service, Food Environment Atlas, Food Environment Atlas", 
+    last_update_date = "12/30/23") %>% 
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+
+# read in data 
+file_path <- "data_raw/foodaccess/FoodEnvironmentAtlas/StateAndCountyData.csv"
+df <- read_csv(file_path, 
+               col_types = cols(FIPS = "c"), 
+               show_col_types = FALSE) %>% 
+  clean_names()
+
+# Add a leading zero into fips and create variable name to match meta data 
+df <- df %>% 
+  mutate(
+    variable_name = tolower(variable_code),
+    fips = str_pad(fips, side = "left", pad = "0", width = "5")) %>% 
+  select(fips, variable_name, value)
+
+# Merge with metadata to keep only data of interest 
+var_list <- meta %>% 
+  select(category, topic_area, variable_name)
+
+df <- left_join(var_list, df)
+
+# Remove year from variable name and create a year column 
+df <- df %>% 
+  mutate(year = str_sub(variable_name, -2),
+         year = str_c("20", year), 
+         variable_name = str_sub(variable_name, 1, -3))
+
+# Divide all percentages by 100 
+df <- df %>% 
+  mutate(
+    value = case_when(
+      str_detect(variable_name, "pct") ~ value/100, 
+      TRUE ~ value))
+
+# Join with county data 
+df <- df %>% left_join(county)
+
+# Add state-level population data to calculate state/US-level percentages
+file_path <- "data_raw/foodaccess/FoodEnvironmentAtlas/SupplementalDataState.csv"
+df_state_pop <- read_csv(file_path, 
+                     show_col_types = FALSE) %>% 
+  clean_names() %>%
+  filter(str_detect(variable_code, "State_Population")) 
+
+# Add year variable, pad fips, add state names
+df_state_pop <- df_state_pop %>% 
+  mutate(
+    year = str_sub(variable_code, -2), 
+    year = str_c("20", year), 
+    fips = str_pad(state_fips, side = "left", pad = "0", width = "2")) %>%
+  rename(population = value) %>%
+  select(fips, year, population) %>% 
+  left_join(state)
+
+# Add US population by year 
+df_us_pop <- df_state_pop %>% 
+  group_by(year) %>% 
+  summarise(population = sum(population)) %>% 
+  mutate(
+    fips = "00")
+
+# Bind rows 
+pop <- bind_rows(df_state_pop, df_us_pop) %>% 
+  select(-state_name)
+rm(df_state_pop, df_us_pop)
+
+# Add county-level data and aggregate to state, drop all percent variables 
+df_state <- df %>% 
+  filter(!str_detect(variable_name, "pct|pth")) %>% 
+  group_by(category, topic_area, year, state_name, variable_name) %>%
+  summarise(value = sum(value)) %>% 
+  left_join(state) 
+ 
+# Add county-level data and aggregate to US, drop all percent variables 
+df_us <- df %>% 
+  filter(!str_detect(variable_name, "pct|pth")) %>% 
+  group_by(category, topic_area, year, variable_name) %>% 
+  summarise(value = sum(value)) %>% 
+  mutate(fips = "00")
+
+# add state and US data and join population data
+df_state_us <- bind_rows(df_state, df_us) 
+
+df_state_us <- left_join(pop, df_state_us, 
+                  by = join_by("fips", "year")) %>% 
+  filter(!is.na(value))
+
+rm(df_state, df_us, pop)
+
+# Add percent and per 1,000 pop at the state and U.S. level 
+df_state_us_pct <- df_state_us %>% 
+  mutate(
+    variable_name = case_when(
+      str_detect(variable_name, "laccess") ~ str_c("pct_", variable_name), 
+      TRUE ~ str_c(variable_name, "pth")), 
+    value = case_when(
+      str_detect(variable_name, "laccess") ~ value/population, 
+      TRUE ~ value/(population/1000))) %>% 
+  select(-population)
+
+df_state_us <- df_state_us %>% 
+  select(-population) %>% 
+  bind_rows(df_state_us_pct)
+
+# Bind county, state and national data 
+df <- bind_rows(df, df_state_us)
+rm(df_state_us, df_state_us_pct)
+
+# Add columns and re-order for final format        
+df <- df %>% 
+  mutate(
+    value_codes = NA) %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define data frame 
+df_FEatlas <- df
+meta_FEatlas <- meta
+
+rm(df, meta)
+```
+
+## Hours worked
+
+We gather county-level data on mean usual hours worked from the [U.S. Census Bureau, American Community Survey, B23020 mean usual hours worked in the past 12 months for workers 16-64 years, 5-year estimate](https://data.census.gov/table/ACSDT5Y2020.B23020?q=mean%20hours%20worked).
+
+We download data from 2012-2022. (Data are available starting in 2010, if you want data from prior years). We select Geography, State, All States within United States, Puerto Rico, and the Island Areas. Data from this selection are provided at the U.S., state and county levels.
+
+```{r}
+
+# Import meta data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_hours")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSDT5Y"), 
+         year = str_remove(year, ".B23020-Column-Metadata.csv")) %>% 
+  filter(str_detect(Label, "Estimate")) %>%
+  rename(variable_code = `Column Name`, 
+         variable_description = Label)
+
+# Keep only necessary elements of variable description 
+meta <- meta %>% 
+  mutate(
+    gender = tolower(str_extract(variable_description,
+                                 "Male|Female")), 
+    gender = case_when(
+      is.na(gender) ~ "total", 
+      TRUE ~ gender),
+    user_friendly_variable_name = str_c("Hours worked per week, average for workers 16-64, in the past 12 months, ", gender)) 
+
+# Define variable names and definition
+meta <- meta %>% 
+  mutate(
+    variable_name = str_c("average_usual_hours_", gender), 
+    variable_definition = 
+      str_c("Average usual hours worked in a week during the past 12 months for workers 16 to 64 years, ", gender))
+
+# Get metadata to use to define elements to keep in data 
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+
+# Define metadata add additional variables 
+meta  <- meta %>% 
+  mutate(
+    category = "Labor",
+    topic_area = "Food Preparation", 
+    periodicity = "yearly", 
+    aggregation = "mean", 
+    format = "integer", 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#labormarket|#gender",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = str_c("Average usual hours, ", gender),
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/table/ACSDT5Y2020.B23020?q=mean%20hours%20worked", 
+    citation = "U.S. Census Bureau, American Community Survey, B23020 mean usual hours worked in the past 12 months for workers 16-64 years, 5-year estimate, county") 
+
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_hours")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSDT5Y"), 
+         year = str_remove(year, ".B23020-Data.csv")) %>% 
+  select(year, GEO_ID, ends_with("E")) 
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+  fips = case_when(
+    str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+    str_detect(GEO_ID, "0100000") ~ "00", 
+    str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID, -NAME)
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Convert "N", null", "-", "+" to NA and add value_codes for data not disclosed ("D")
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value == "N" ~ "D", 
+      TRUE ~ NA),
+    value = str_remove_all(value, ","),
+    value = str_remove_all(value, "\\-"), 
+    value = str_remove_all(value, "\\+"), 
+    value = case_when(
+      value == "null" | value=="-" ~ NA,
+      TRUE ~ value), 
+    value = as.numeric(value))
+
+# Join data and meta data
+df <- metadf %>% 
+  left_join(df, by = c("year", "variable_code"))
+
+# Divide women's income as a percent of men's by 100 so in percent format
+df <- df %>% 
+  mutate(
+    value = case_when(
+      str_detect(variable_name, "percentage") ~ value/100, 
+      TRUE ~ value))
+
+# Add in variables and put in correct order
+df <- df %>% 
+  left_join(county_state) %>% 
+  mutate(
+    category = "Labor", 
+    topic_area = "Food Preparation") %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define dataframe and metadata 
+df_meanhours <- df
+meta_meanhours <- meta
+```
+
+## Travel time to work
+
+We gather data from the [U.S. Census Bureau, American Community Survey, B08303 Travel Time to Work, 5-year estimate, county](https://data.census.gov/cedsci/table?q=b08303&tid=ACSDT5Y2020.B08303). We download data from 2012-2022. (Data are available starting in 2010, if you want data from prior years). We select Geography, County, All Counties within United States and Puerto Rico. These data include both state and county-level data. We aggregate state data to get national totals.
+
+From these data, we calculate percentage of workers within each category of travel time to work.
+
+We convert "null" to NA and convert to numeric, there is no information on if this means anything beyond not available.
+
+```{r}
+
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_traveltime")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSDT5Y"), 
+         year = str_remove(year, ".B08303-Column-Metadata.csv")) %>% 
+  filter(!str_detect(`Column Name`, "M$")) %>% 
+  rename(variable_code = `Column Name`, 
+         variable_description = Label)
+
+# Keep only necessary elements of variable description 
+meta <- meta %>% 
+  mutate(
+    variable_description = str_remove(variable_description, 
+                                      "Estimate!!Total!!"), 
+    variable_description = str_remove(variable_description, 
+                                      "Estimate!!"), 
+    variable_description = str_remove(variable_description, 
+                                      ":"), 
+    variable_description = tolower(str_remove(variable_description, 
+                                      "Total!!"))) %>% 
+  filter(!(variable_description %in% c("geography", 
+                                       "geographic area name")))
+
+# Define variable names and definitions
+meta <- meta %>% 
+  mutate(
+    variable_name = 
+      str_replace_all(variable_description, 
+                    ", ", "_"), 
+    variable_name = str_replace_all(variable_name, 
+                                         " ", "_"), 
+    variable_name = str_c("travel_time_to_work_", variable_description), 
+    user_friendly_variable_name = str_c("Travel time to work, ", 
+                                        variable_description), 
+    variable_definition = case_when(
+      variable_description == "total" ~ 
+        "Number of workers, 16 years of age and over, who did not work from home", 
+      TRUE ~ str_c("Number of workers, 16 years of age and over, with travel time to work ", variable_description))) 
+
+# Add meta data for each category as a percent of total 
+meta_pct <- meta %>% 
+  filter(variable_code != "B08303_001E") %>% 
+  mutate(
+    variable_code = str_c(variable_code, "_pct"), 
+    variable_name = str_c(variable_name, "_pct"), 
+    user_friendly_variable_name = str_c(
+      user_friendly_variable_name, ", percent"), 
+    variable_definition = str_replace(
+      variable_definition, "Number", "Percent"))
+
+# Add percent metadata to number metadata 
+meta <- bind_rows(meta, meta_pct)
+rm(meta_pct)
+
+# Get metadata to use to get data of interest
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+rm(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    category = "Food Access",
+    topic_area = "Food Preparation", 
+    periodicity = "yearly", 
+    aggregation = case_when(
+      str_detect(variable_code, "_pct") ~ "percent", 
+      TRUE ~ "count"), 
+    format = "integer", 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#labormarket|#commuting|#commute",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = case_when(
+      aggregation == "percent" ~ "Percent of workers", 
+      aggregation == "count" ~ "Number of workers"), 
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/cedsci/table?q=b08303&tid=ACSDT5Y2020.B08303", 
+    citation = "U.S. Census Bureau, American Community Survey, B08303 Travel Time to Work, 5-year estimate, county") 
+    
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_traveltime")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSDT5Y"), 
+         year = str_remove(year, ".B08303-Data.csv")) %>% 
+  select(year, GEO_ID, ends_with("E")) 
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+    fips = case_when(
+      	str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+        str_detect(GEO_ID, "0100000") ~ "00", 
+        str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID, -NAME) %>% 
+  select(fips, year, everything())
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Convert "null" to NA and convert to numeric - there is no information on if this means anything beyond not available
+df <- df %>% 
+  mutate(
+    value = case_when(
+      value == "null" ~ NA, 
+      TRUE ~ value), 
+    value = as.numeric(value))
+
+# Add US level 
+df_us <- df %>% 
+  group_by(year, variable_code) %>%
+  summarise(value = sum(value, na.rm = TRUE)) %>% 
+  mutate(fips = "00")
+
+df <- bind_rows(df, df_us)
+rm(df_us)  
+
+# Add percentages 
+df <- df %>% 
+  pivot_wider(
+    names_from = variable_code, 
+    values_from = value) %>% 
+  mutate(across(B08303_002E:B08303_013E, 
+                ~.x/B08303_001E, 
+                .names = "{.col}_pct")) %>% 
+  pivot_longer(
+    cols = !c(fips, year), 
+    names_to = "variable_code", 
+    values_to = "value")
+  
+# Add variable names, counties and states 
+df <- metadf %>% 
+  left_join(df) %>%
+  left_join(county_state) %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation", 
+    value_codes = NA) %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define datasets 
+df_travel_time <- df
+meta_travel_time <- meta
+```
+
+## Commuting characteristics by sex
+
+We use 5-Year Estimates data from the [U.S. Census Bureau, American Community Survey, S0801, Commuting Characteristics by Sex](https://data.census.gov/cedsci/table?q=commuter&tid=ACSST5Y2020.S0801&moe=false&tp=false). We download data from 2012-2022. (Data are available starting in 2010, if you want data from prior years). We select we select Geography, Nation, United States. This provides US-, state- and county-level data.
+
+Data has the number of workers total and by gender 16 years and older and the percentage of workers in each commuting category. We gather data on the percentage of workers based on their place of work.
+
+```{r}
+
+# Define varlist 
+var_list <- c("S0801_C01_016E", "S0801_C01_017E", 
+              "S0801_C01_020E", "S0801_C02_016E", 
+              "S0801_C02_017E", "S0801_C02_020E",
+              "S0801_C03_016E", "S0801_C03_017E", "S0801_C03_020E")
+
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_commute")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S0801-Column-Metadata.csv")) %>%
+  filter(`Column Name` %in% var_list) %>%
+  rename(variable_code = `Column Name`, 
+         variable_description = Label)
+
+# Create variable descriptions 
+meta <- meta %>% 
+  mutate(
+    gender = case_when(
+      str_detect(variable_description, "Total") ~ "total", 
+      str_detect(variable_description, "Male") ~ "male", 
+      str_detect(variable_description, "Female") ~ "female"), 
+    variable_description = str_remove_all(
+      variable_description, "Total!!|Estimate!!|Male!!|Female!!|PLACE OF WORK!!|Workers 16 years and over!!|Living in a place!!"), 
+    variable_description = case_when(
+    variable_description=="Worked in state of residence!!Worked outside county of residence" ~ "Worked in state and outside county of residence", 
+      TRUE ~ variable_description), 
+    variable_description = str_c(variable_description, ", ", 
+                                 gender, ", percent"))
+
+# Define variable names and definitions
+meta <- meta %>% 
+  mutate(
+    variable_name = 
+      str_replace_all(variable_description, 
+                      ", ", "_"), 
+    variable_name = tolower(str_replace_all(variable_name, 
+                                    " ", "_")), 
+    user_friendly_variable_name = 
+      str_remove(variable_description, ", percent"), 
+    user_friendly_variable_name = 
+      str_c("Percent of workers who ", tolower(user_friendly_variable_name)), 
+    variable_definition = str_replace(
+      user_friendly_variable_name, 
+      "Percent of workers who ", "Percent of workers 16 years and over who "))
+
+# Keep years and variable names to merge with df 
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+rm(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    category = "Labor",
+    topic_area = "Food Preparation", 
+    periodicity = "yearly", 
+    aggregation = "percent",
+    format = "integer", 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#labormarket|#commuting|#commute",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = "Percent of workers", 
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/cedsci/table?q=commuter&tid=ACSST5Y2020.S0801&moe=false&tp=false", 
+    citation = "U.S. Census Bureau, American Community Survey, S0801, Commuting Characteristics by Sex, county") 
+
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_commute")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S0801-Data.csv")) %>% 
+  select(year, GEO_ID, all_of(var_list)) 
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+  fips = case_when(
+    str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+    str_detect(GEO_ID, "0100000") ~ "00", 
+    str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID) %>% 
+  select(fips, year, everything())
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Convert "null" to NA and convert to numeric - there is no information on if this means anything beyond not available
+df <- df %>% 
+  mutate(
+    value = case_when(
+      value == "null" ~ NA, 
+      TRUE ~ value), 
+    value = as.numeric(value))
+
+# Divide by 100 so in percentage terms 
+df <- df %>% 
+  mutate(
+    value = value/100)
+
+# Add variable names, counties and states 
+df <- metadf %>% 
+  left_join(df) %>%
+  left_join(county_state) %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation", 
+    value_codes = NA) %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define datasets 
+df_commute_char <- df
+meta_commute_char <- meta
+
+```
+
+## Food Insecurity
+
+We gather state- and county-level overall and child food insecurity rates from [Feeding America Map the Meal Gap](https://map.feedingamerica.org/). To gain access to the data, we filled out the [Map the Meal Gap Dataset Request Form](https://www.feedingamerica.org/research/map-the-meal-gap/by-county). We provide data from 2011-2021. (Data is available starting in 2009). Data is provided at the state- and county-level in the data sets. We calculate national rates using U.S. population data from the [5-year U.S. Census Bureau, American Community Survey (ACS) data, DP05, ACS Demographic and Housing Estimates](https://data.census.gov/table/ACSDP1Y2022.DP05?q=population%20&g=010XX00US), the same data source used to calculate the data provided here.
+
+Feeding America does not recommend comparing food insecurity estimates for any geography from 2021, 2020, 2019, or 2018 data to estimates from 2017 data or any previous year due to the changes in the methodology made in 2020 (i.e., updated poverty variable and new disability variable). Estimates from the 2011-2017 data are more directly comparable. We add this information into the metadata for these variables.
+
+Blank cells indicate that values are not applicable and/or data required to produce local estimates were unavailable.
+
+There are changes in the structure of the files across years that make it difficult to import the data functionally. Although not best practice, I decided the fastest way to import the data from 2011-2017 was to manually move sheets so they are all in the same order and sheet names can be changed functionally to not include the year and to allow for binding of multiple years of data. I moved sheets in 2014-2017. (Sheet order: State, County, Cong District, Citation). Data from 2018 has an additional row added to the top, so it is imported manually. Data from 2019-2021 is all on the same spreadsheet and also imported manually as it has a different structure than previous years.
+
+```{r}
+library(readxl)
+
+# Import data - due to changes in spreadsheets, I imported each year manually
+file_path <- "data_raw/foodaccess/MaptheMealGap/2011_2017"
+file_list <- list.files(path = file_path, 
+                        pattern = "\\.xlsx$", 
+                        full.names = TRUE)
+
+# Imports all sheets from one file where each file is a list and the sheets are another list 
+myfun <- function(file_path){
+  file_path %>%
+  excel_sheets() %>% 
+  set_names() %>%
+  map(read_excel, path = file_path) 
+}
+df <- map(file_list, myfun)
+
+# Change column names to not include year 
+new_colnames <- c("state", "county", "congdistrict", "citation")
+
+df <- map(df, ~ setNames(.x, new_colnames))
+df_state <- df
+df_county <- df
+
+#Get state-level data and bind variables of interest into one data frame
+df_state <- map(df_state[1:7], ~ .x[['state']] %>% 
+                  select(FIPS, ends_with("Rate"), 
+                         starts_with("Number"), 
+                         starts_with("#")) %>% 
+                  clean_names() %>%  
+                  mutate(across(c(2,3), ~as.numeric(.)))  %>% 
+                  pivot_longer(
+                    cols = !fips, 
+                    names_to = "variable_name", 
+                    values_to = "value") %>% 
+                  mutate(
+                    year = case_when(
+                      str_detect(variable_name, "number") ~ 
+                        str_sub(variable_name, -4), 
+                      str_detect(variable_name, "rate") ~
+                        str_sub(variable_name, 2, 5)), 
+                    variable_name = case_when(
+                      str_detect(variable_name, "number") ~ 
+                        str_sub(variable_name, 1, -9),
+                      str_detect(variable_name, "rate") ~ 
+                        str_sub(variable_name, 7)), 
+                    fips = str_pad(fips, side = "left", 
+                                   width = "2", pad = "0"))) %>% 
+  bind_rows()
+
+#Get county-level data and bind variables of interest into one data frame
+df_county <- map(df_county[1:7], ~ .x[['county']] %>%
+                  select(FIPS, ends_with("Rate"), starts_with("Number")) %>% 
+                  clean_names() %>% 
+                  mutate(across(c(2,3), ~as.numeric(.)))  %>% 
+                  pivot_longer(
+                    cols = !fips, 
+                    names_to = "variable_name", 
+                    values_to = "value") %>% 
+                  mutate(
+                    year = case_when(
+                      str_detect(variable_name, "number") ~ 
+                        str_sub(variable_name, -4), 
+                      str_detect(variable_name, "rate") ~
+                        str_sub(variable_name, 2, 5)), 
+                    variable_name = case_when(
+                      str_detect(variable_name, "number") ~ 
+                        str_sub(variable_name, 1, -9),
+                      str_detect(variable_name, "rate") ~ 
+                        str_sub(variable_name, 7)), 
+                    fips = str_pad(fips, side = "left", 
+                                   width = "5", pad = "0"))) %>% 
+  bind_rows()
+
+# Combine state and county-data 
+df <- bind_rows(df_county, df_state)
+rm(df_county, df_state, dfnew)
+
+# Add variables for final data frame 
+df <- df %>%
+  mutate(
+    variable_name = case_when(
+      variable_name == "food_insecurity_rate" ~ 
+        str_c("overall_", variable_name), 
+      TRUE ~ variable_name))
+
+# Import data from 2018-2021 from two file separately  
+df2018_county <- read_xlsx(
+  "data_raw/foodaccess/MaptheMealGap/MMG2020_2018Data_ToShare.xlsx", 
+  sheet = "2018 County", 
+  skip = 1) %>% 
+  clean_names() %>%
+  select(fips, ends_with("_rate"), starts_with("number")) %>% 
+  mutate(year = 2018) %>% 
+  rename(overall_food_insecurity_rate = x2018_food_insecurity_rate, 
+         child_food_insecurity_rate = x2018_child_food_insecurity_rate, 
+         number_of_food_insecure_persons = 
+           number_of_food_insecure_persons_in_2018, 
+         number_of_food_insecure_children = 
+           number_of_food_insecure_children_in_2018)
+ 
+df2018_state <- read_xlsx(
+  "data_raw/foodaccess/MaptheMealGap/MMG2020_2018Data_ToShare.xlsx", 
+  sheet = "2018 State", 
+  skip = 1) %>% 
+  clean_names() %>%
+  select(fips, ends_with("_rate"), starts_with("number")) %>% 
+  mutate(year = 2018) %>% 
+  rename(overall_food_insecurity_rate = x2018_food_insecurity_rate, 
+         child_food_insecurity_rate = x2018_child_food_insecurity_rate, 
+         number_of_food_insecure_persons = 
+           number_of_food_insecure_persons_in_2018, 
+         number_of_food_insecure_children = 
+           number_of_food_insecure_children_in_2018)
+
+# Import 2019-2021 data 
+df1921_county <- read_xlsx(
+  "data_raw/foodaccess/MaptheMealGap/MMG2023_2019-2021_Data_ToShare.xlsx", 
+  sheet = "County") %>% 
+  clean_names() %>%
+  select(fips, year, ends_with("_rate"), starts_with("number")) %>% 
+  rename(number_of_food_insecure_persons = 
+           number_of_food_insecure_persons_overall)
+
+df1921_state <-  read_xlsx(
+  "data_raw/foodaccess/MaptheMealGap/MMG2023_2019-2021_Data_ToShare.xlsx", 
+  sheet = "State") %>% 
+  clean_names() %>%
+  select(fips, year, ends_with("_rate"), 
+         number_of_food_insecure_persons_overall, 
+         number_of_food_insecure_children) %>% 
+  rename(number_of_food_insecure_persons = 
+           number_of_food_insecure_persons_overall)
+
+# Bind all data together
+dfnew <- bind_rows(df2018_county, df2018_state, df1921_county, df1921_state)
+rm(df2018_county, df2018_state, df1921_county, df1921_state)
+
+# Pivot longer and add year 
+dfnew <- dfnew %>% 
+   pivot_longer(
+    cols = !c(fips, year), 
+    names_to = "variable_name", 
+    values_to = "value") %>%
+  mutate(
+    fips = as.character(fips), 
+    year = as.character(year), 
+    fips = case_when(
+      str_length(fips) == 1 ~ 
+        str_pad(fips, side = "left", width = "2", pad = "0"), 
+      str_length(fips) == 4 ~ 
+        str_pad(fips, side = "left", width = "5", pad = "0"), 
+      TRUE ~ fips)) %>% 
+  arrange(year)
+
+# Bind to previous years of data 
+df <- bind_rows(df, dfnew)
+rm(dfnew)
+
+# Add national data 
+# Import population data 
+data_path <- list.dirs(path =
+                         "data_raw/foodaccess/MaptheMealGap/ACS_population")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+us_pop <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSDP5Y"), 
+         year = str_remove(year, ".DP05-Data.csv")) %>% 
+  filter(NAME == "United States") %>%
+  select(year, DP05_0001E) %>% 
+  rename(population = DP05_0001E) %>% 
+  mutate(population = as.numeric(population))
+
+# Get US data for food insecurity 
+us_df <- df %>% 
+  group_by(year, variable_name) %>% 
+  summarise(value = sum(value)) %>% 
+  filter(str_detect(variable_name, "number")) 
+
+# Pivot wider, join with population data and calculate rates 
+us_df <- us_df %>% 
+  pivot_wider(
+    names_from = variable_name, 
+    values_from = value) %>% 
+  left_join(us_pop) %>% 
+  mutate(
+    overall_food_insecurity_rate = 
+      number_of_food_insecure_persons/population, 
+    child_food_insecurity_rate = 
+      number_of_food_insecure_children/population)
+  
+# Keep data of interest, pivot longer and add fips
+us_df <- us_df %>% 
+  select(year, ends_with("rate")) %>% 
+  pivot_longer(
+    cols = !year, 
+    names_to = "variable_name", 
+    values_to = "value") %>% 
+  mutate(fips = "00")
+
+# Add to original data and sort by year 
+df <- bind_rows(df, us_df) %>% 
+  arrange(year)
+
+rm(us_df, us_pop)
+
+# Drop number of food insecure, keep rates only 
+df <- df %>% 
+  filter(str_detect(variable_name, "rate"))
+
+# Join with state and county data and add additional variables 
+df <- df %>% 
+  left_join(county_state) %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Food Insecurity", 
+    value_codes = NA) %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define metadata 
+meta <- df %>% 
+  select(-c(fips, state_name, county_name, value, value_codes)) %>% 
+  filter(str_detect(variable_name, "rate"))
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    user_friendly_variable_name = case_when(
+      str_detect(variable_name, "overall") ~ "Food insecurity rate, overall", 
+      str_detect(variable_name, "child") ~ "Food insecurity rate, child"),
+    variable_definition = case_when(
+      str_detect(variable_name, "overall") ~ "Percent of households that did not have access, at all times, to enough food for an active, healthy life for all household members. (Due to changes in methodology, you can compare 2011-2017 data and 2018-2021 data, but cannot compare across the two time periods).", 
+      str_detect(variable_name, "child") ~ "Percent of children that did not have access, at all times, to enough food for an active, healthy life for all household members. (Due to changes in methodology, you can compare 2011-2017 data and 2018-2021 data, but cannot compare across the two time periods)."),
+    periodicity = "annual", 
+    aggregation = "percent", 
+    format = "percent", 
+    keywords = "Feeding America|Map the Meal Gap|Hunger",
+    hashtags = "#endhugar|#foodinsecurity", 
+    chart_type1 = "LineChartSeries",
+    chart_type2 = "BarChart", 
+    chart_axis_x1 = NA, 
+    chart_axis_x2 = 
+      case_when(
+        variable_name == "overall_food_insecurity_rate" ~ 
+          "Overall food insecurity rate",
+        variable_name == "child_food_insecurity_rate" ~ 
+          "Child food insecurity rate"), 
+    chart_axis_y1 = chart_axis_x2,
+    chart_axis_y2 = NA,
+    source = "Feeding America, Map the Meal Gap",
+    url = "https://map.feedingamerica.org",
+    citation = "Gundersen, C., Strayer, M., Dewey, A., Hake, M., & Engelhard, E. (2023). Map the Meal Gap 2023: An Analysis of County and Congressional District Food Insecurity and County Food Cost in the United States in 2021. Feeding America", 
+    last_update_date = "12/12/23")
+
+# Define data sets 
+meta_foodinsecurity <- meta
+df_foodinsecurity <- df
+
+rm(meta, df)
+```
+
+## Poverty status
+
+We use 5-Year Estimates data from the [U.S. Census Bureau, American Community Survey, S1701 Poverty Status in the Past 12 Months](https://data.census.gov/table?q=S1701:%20POVERTY%20STATUS%20IN%20THE%20PAST%2012%20MONTHS&g=010XX00US,$0500000). We download all available 5-year estimate data, 2012-2022. We select Geography, County, All Counties within United States and Nation, United States and download table data. These data include US, state, and county-level estimates.
+
+In the table, data is separated for (1) "Population for whom poverty status is determined" and (2) "Unrelated individuals for whom poverty status determined". We only provide data for (1).
+
+An "N" entry in the estimate columns indicates that data for this geographic area cannot be displayed because the number of sample cases is too small. We code this as NA and indicate an "D" in the values_column for not disclosed. An "(X)" means that the estimate is not applicable or not available, we code this as NA. A value of "null" in the estimate means there is no data available for the requested geography, this is also coded as NA. An ''-'' entry in the estimate column indicates that either no sample observations or too few sample observations were available to compute an estimate, or a ratio of medians cannot be calculated because one or both of the median estimates falls in the lowest interval or upper interval of an open-ended distribution. Because we do not know if this estimate is too NA or not disclosed, we code it as NA.
+
+```{r}
+
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_poverty")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S1701-Column-Metadata.csv")) %>% 
+  filter(!str_detect(`Column Name`, "M$")) %>% 
+  rename(variable_code = `Column Name`, 
+         variable_description = Label)
+
+# Drop data for unrelated individuals for whom poverty status determined
+meta <- meta %>% 
+  mutate(
+    c1 = as.numeric(str_remove(str_sub(variable_code, -4), "E"))) %>% 
+  filter(c1<39) %>% 
+  select(-c1)
+  
+# Keep only data on "below poverty level" and drop data related to total number of households at a certain percent of poverty level  
+meta <- meta %>% 
+  filter(str_detect(variable_description, "poverty level") & 
+           !str_detect(variable_description, "All Individuals below!!"))
+
+# Keep only necessary elements of variable description 
+meta <- meta %>% 
+  mutate(
+    c1 = case_when(
+      str_detect(variable_description, "Percent") ~ "percent", 
+      TRUE ~ NA), 
+    variable_description = 
+      str_remove_all(variable_description, 
+                     "Total!!|Below poverty level!!|Estimate!!|AGE!!|SEX!!|RACE AND HISPANIC OR LATINO ORIGIN!!|EDUCATIONAL ATTAINMENT!!|EMPLOYMENT STATUS!!|WORK EXPERIENCE!!|ALL INDIVIDUALS WITH INCOME BELOW THE FOLLOWING POVERTY RATIOS!!|Population for whom poverty status is determined!!|Percent below poverty level!!|One race!!|Under 18 years!!")) %>% 
+  separate(variable_description, 
+           into = c("variable_description", "c2", "c3"), 
+           sep = "!!") %>% 
+  mutate(
+    variable_description = case_when(
+      is.na(c2) ~ str_c(variable_description), 
+      !is.na(c2) & is.na(c3) ~ str_c(variable_description, 
+                                     ", ", tolower(c2)), 
+      !is.na(c2) & !is.na(c3) ~ str_c(variable_description,
+                                 ", ", tolower(c2), 
+                                 ", ", tolower(c3))), 
+    variable_description = case_when(
+      c1 == "percent" ~ str_c(variable_description, ", ", c1), 
+      TRUE ~ variable_description), 
+    variable_description = str_c("Below poverty level, ", 
+                                 tolower(variable_description))) %>% 
+  select(-c2, -c3)
+    
+# Define variable names and definitions
+meta <- meta %>% 
+  mutate(
+    variable_name = 
+      tolower(str_replace_all(variable_description, 
+                      ", ", "_")), 
+    variable_name = str_replace_all(variable_name, 
+                                    " ", "_"), 
+    variable_name = str_replace(variable_name, "_percent","_pct"),
+    user_friendly_variable_name = variable_description, 
+    variable_definition = str_remove(
+      variable_description, ", percent"), 
+    variable_definition = case_when(
+      c1 == "percent" ~ str_c(
+        "Percent of people ", 
+        tolower(variable_definition)), 
+      is.na(c1) ~ str_c(
+        "Number of people ", 
+        tolower(variable_definition))), 
+    variable_definition = case_when(
+      str_detect(variable_description, 
+                 "for whom poverty status is determined") ~ 
+        variable_definition, 
+      TRUE ~ str_c(variable_definition, 
+                   ", for whom poverty status is determined")))
+
+# Get metadata to be used to define df 
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+rm(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    category = "Demographics",
+    topic_area = "Population Characteristic", 
+    periodicity = "yearly", 
+    aggregation = case_when(
+      str_detect(variable_name, "_pct") ~ "percent", 
+      TRUE ~ "count"), 
+    format = case_when(
+      str_detect(variable_name, "_pct") ~ "percent", 
+      TRUE ~ "integer"), 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#poverty",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = case_when(
+      aggregation == "percent" ~ "Percent of people", 
+      aggregation == "count" ~ "Number of people"), 
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/table?q=S1701:%20POVERTY%20STATUS%20IN%20THE%20PAST%2012%20MONTHS&g=010XX00US,$0500000", 
+    citation = "U.S. Census Bureau, American Community Survey, S1701 Poverty Status in the Past 12 Months, 5-year estimate, county") 
+
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_poverty")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S1701-Data.csv")) %>% 
+  select(year, GEO_ID, ends_with("E")) 
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+  fips = case_when(
+    str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+    str_detect(GEO_ID, "0100000") ~ "00", 
+    str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID, -NAME) %>% 
+  select(fips, year, everything())
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Convert non-numeric values to NA and add value_codes of "D" (not disclosed) for entries with "N" 
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value == "N" ~ "D", 
+      TRUE  ~ NA), 
+    value = case_when(
+      value %in% c("N", "(X)", "-") ~ NA, 
+      TRUE ~ as.numeric(value)))
+
+# Add variable names, counties and states 
+df <- metadf %>% 
+  left_join(df) %>%
+  left_join(county_state) %>% 
+  mutate(
+    category = "Demographics", 
+    topic_area = "Population Characteristic") %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Divide percentages by 100 
+df <- df %>% 
+  mutate(
+    value = case_when(
+      str_detect(variable_name, "pct") ~ value/100, 
+      TRUE ~ value))
+
+# Define datasets 
+df_poverty <- df
+meta_poverty <- meta %>% 
+  select(-variable_code, -c1)
+```
+
+## Population 60 and over
+
+We gather 5-Year Estimates on the percentage of the population over 60 from the [U.S. Census Bureau, American Community Survey, S0101, Age and Sex](https://data.census.gov/cedsci/table?q=popoulation%20by%20age%20&g=0100000US%240500000&y=2020&tid=ACSST5Y2020.S0101). We download data from 2012-2022. (Data is available starting in 2010). We select Geography, County, All Counties within United States and Puerto Rico, and State, All States within United States, Puerto Rico and the Island Areas, and download table data. These data include state, and county-level estimates.
+
+An "N" entry in the estimate columns indicates that data for this geographic area cannot be displayed because the number of sample cases is too small. We code this as NA and indicate an "D" in the values_column for not disclosed. An "(X)" means that the estimate is not applicable or not available, we code this as NA. A value of "null" in the estimate means there is no data available for the requested geography, this is also coded as NA.
+
+The way data was named and collected was the same from 2012-2016 and 2017-2022. In the earlier time period, data was provided for the total population and the percentage of the population over 60. In the latter time period, data was provided for the total population, the population over 60 and the percentage of the population over 60. To get the population over 60 for the initial time period, we multiply the percentage of the population by the total population.
+
+```{r}
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_over60")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S0101-Column-Metadata.csv"), 
+         year = as.numeric(year)) %>% 
+  filter(!str_detect(`Column Name`, "M$")) %>% 
+  rename(variable_code = `Column Name`, 
+         variable_description = Label) 
+
+# Due to differences in variable names across years, we divide the data into two time periods, 2012-2016 and 2017-2022
+meta1 <- meta %>% 
+  filter(year<2017)
+
+meta2 <- meta %>% 
+  filter(year>=2017)
+
+# Keep variables with 60 years and older only, total only. Percentages are computed for some years but not others. We compute percentages for all years.  
+meta1 <- meta1 %>% 
+  filter(variable_description == "Total!!Estimate!!Total population" | 
+           variable_description == 
+           "Total!!Estimate!!SELECTED AGE CATEGORIES!!60 years and over")
+
+meta2 <- meta2 %>% 
+  filter(variable_description %in% 
+           c("Estimate!!Total!!Total population",
+             "Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!60 years and over",
+             "Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!60 years and over"))
+
+# Bind data together and convert year back to a character
+meta <- bind_rows(meta1, meta2) %>% 
+  mutate(year = as.character(year))
+rm(meta1, meta2)
+
+# Keep only necessary elements of variable description
+# While the variable description from 2012-2016 doesn't say percent, the data is percent
+meta <- meta %>% 
+  mutate(
+    v1 = case_when(
+      str_detect(variable_description, "Percent") | 
+        (year %in% c("2012", "2013", "2014", "2015", "2016") & 
+           variable_description == "60 years and over") ~ "percent", 
+      TRUE ~ NA),  
+    variable_description = str_remove(variable_description, 
+                                      "Estimate!!Total!!"), 
+    variable_description = str_remove(variable_description, 
+                                      "Total!!Estimate!!"), 
+    variable_description = str_remove(variable_description, 
+                                      "SELECTED AGE CATEGORIES!!"), 
+    variable_description = str_remove(variable_description, 
+                                      "Total population!!"), 
+    variable_description = str_remove(variable_description, 
+                                      "Estimate!!Percent!!"), 
+    variable_description = case_when(
+      is.na(v1) ~ variable_description, 
+      !is.na(v1) ~ str_c(variable_description, ", percent")))
+
+# Add additional metadata 
+meta <- meta %>% 
+  mutate(
+    variable_name = str_remove_all(variable_description, 
+                                   ","), 
+    variable_name = 
+      tolower(str_replace_all(variable_name, 
+                      " ", "_")),  
+    user_friendly_variable_name = case_when(
+      variable_description == "60 years and over" ~ "Population 60 years and over", 
+      variable_description == "60 years and over_pct" ~ 
+        "Population 60 years and over, percent"), 
+    variable_definition = case_when(
+      str_detect(variable_description, "pct") ~ 
+        "Percent of the population over 60 years of age", 
+      TRUE ~ "Number of people over 60 years of age")) 
+  
+# Keep metadata to define df 
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+rm(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    category = "Demographics",
+    topic_area = "Population Characteristic", 
+    periodicity = "yearly", 
+    aggregation = case_when(
+      str_detect(variable_code, "_pct") ~ "percent", 
+      TRUE ~ "count"), 
+    format = "integer", 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#over60",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = case_when(
+      aggregation == "percent" ~ "Percent of population over 60", 
+      aggregation == "count" ~ "Population over 60"), 
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/cedsci/table?q=popoulation%20by%20age%20&g=0100000US%240500000&y=2020&tid=ACSST5Y2020.S0101", 
+    citation = "U.S. Census Bureau, American Community Survey, S0101, Age and Sex, 5-year estimate, county") 
+
+# Variable codes changed over time, drop duplicate 
+meta <- meta %>% 
+  filter(variable_code != "S0101_C02_028E")
+
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_over60")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S0101-Data.csv")) %>% 
+  select(year, GEO_ID, ends_with("E")) 
+
+# Get fips from GEO_ID 
+df <- df %>% mutate(
+  fips = case_when(
+    str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+    str_detect(GEO_ID, "0100000") ~ "00", 
+    str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5)))
+
+# For each year, there is a GEO_ID "Geography" without values, we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID, -NAME) %>% 
+  select(fips, year, everything())
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Convert "null" to NA and convert to numeric - there is no information on if this means anything beyond not available
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value == "N" ~ "D",
+      TRUE ~ NA), 
+    value = case_when(
+      value %in% c("null", "(X)", "-") ~ NA, 
+      TRUE ~ value), 
+    value = as.numeric(value))
+
+# Add variable names
+df <- metadf %>% 
+  left_join(df, by = c("year", "variable_code"))
+
+# To get the population over 60 for 2012-2016, we multiply the percentage of the population by the total population
+df <- df %>% 
+  select(-variable_code) %>% 
+  pivot_wider(
+    names_from = "variable_name", 
+    values_from = "value") %>%
+  mutate(
+      `60_years_and_over_percent` = case_when(
+      is.na(`60_years_and_over_percent`) ~ `60_years_and_over`, 
+      TRUE ~ `60_years_and_over`), 
+      `60_years_and_over_percent` = `60_years_and_over_percent`/100,
+      `60_years_and_over` = case_when(
+        year %in% c("2012", "2013", "2014", "2015", "2016") ~ 
+          round(`60_years_and_over_percent`*total_population, digits = 0), 
+        TRUE ~ `60_years_and_over`))
+
+# Pivot back to original form
+df <- df %>% 
+  pivot_longer(
+    cols = !c(year, fips, value_codes), 
+    names_to = "variable_name", 
+    values_to = "value")
+
+# Drop total population data 
+df <- df %>% 
+  filter(variable_name != "total_population")
+
+# Add variable names, counties and states 
+df <- df %>%
+  left_join(county_state)
+
+# Add additional variables 
+df <- df %>%
+  mutate(
+    category = "Demographics", 
+    topic_area = "Population Characteristic") %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define datasets 
+df_over60 <- df 
+meta_over60 <- meta
+```
+
+## Disability by age, race/ethnicity, and gender
+
+We use 5-year data from the [U.S. Census Bureau, American Community Survey, S1810 Disability Characteristics](https://data.census.gov/table?q=disability%20status&g=010XX00US,$0400000,$0500000). We download data from 2012-2022. (Data is available starting in 2010). We select Geography, County, All Counties within United States and Puerto Rico, and State, All States within United States, Puerto Rico and the Island Areas, and Nation, United States and download table data. These data include national, state, and county-level estimates.
+
+An "N" entry in the estimate columns indicates that data for this geographic area cannot be displayed because the number of sample cases is too small. We code this as NA and indicate an "D" in the values_column for not disclosed. An "(X)" means that the estimate is not applicable or not available, we code this as NA. A value of "null" in the estimate means there is no data available for the requested geography, this is also coded as NA. An "-" entry in the estimate column indicates that either no sample observations or too few sample observations were available to compute an estimate. We code this as NA with no values_code.
+
+```{r}
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_disability")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S1810-Column-Metadata.csv")) %>% 
+  filter(!str_detect(`Column Name`, "M$")) %>% 
+  rename(variable_code = `Column Name`, 
+         variable_description = Label)
+
+# Drop variables related to disability type, totals that include both disabled and not, and with percent imputed
+meta <- meta %>% 
+  filter(!str_detect(variable_description, "difficulty|PERCENT IMPUTED|Total!!Estimate!!"))
+
+# Drop geography 
+meta <- meta %>% 
+  filter(!variable_code %in% c("GEO_ID", "NAME"))
+
+# Keep only necessary elements of variable description 
+meta <- meta %>% 
+  mutate(
+    c1 = case_when(
+      str_detect(variable_description, "Percent") ~ "percent", 
+      TRUE ~ NA), 
+    variable_description = 
+      str_remove_all(variable_description, 
+                     "With a disability!!Estimate!!|Percent with a disability!!Estimate!!|SEX!!|RACE AND HISPANIC OR LATINO ORIGIN!!|Estimate!!Percent with a disability!!Subject!!|Estimate!!With a disability!!Subject!!|One Race!!|AGE!!|Estimate!!Total!!Subject!!|	
+Estimate!!Percent with a disability!!Total civilian noninstitutionalized population!!|Estimate!!With a disability!!Total civilian noninstitutionalized population!!|Estimate!!Total!!Total civilian noninstitutionalized population!!|Estimate!!Percent with a disability!!Total civilian noninstitutionalized population!!|Estimate!!Percent with a disability!!|Estimate!!Total!!|Estimate!!With a disability!!|civilian noninstitutionalized population"), 
+    variable_description = case_when(
+      is.na(c1) ~ variable_description, 
+      TRUE ~ str_c(variable_description, ", ", c1)), 
+    variable_description = str_c("Disability, ", tolower(variable_description)), 
+    variable_description = case_when(
+      variable_description == "Disability, total " ~ "Disability, total", 
+      variable_description == "Disability, total , percent" ~ "Disability, total, percent",
+      TRUE ~ variable_description))
+
+# Add variable name and definition 
+meta <- meta %>%
+  mutate(
+    variable_name = 
+      tolower(str_replace_all(variable_description, 
+                              ", ", "_")), 
+    variable_name = str_replace_all(variable_name, 
+                                    " ", "_"), 
+    variable_name = str_replace(variable_name, "_percent","_pct"),
+    user_friendly_variable_name = variable_description, 
+    variable_definition = str_remove(
+      variable_description, ", percent"), 
+    variable_definition = case_when(
+      c1 == "percent" ~ str_c(
+        "Percent of civilian noninstitutionalized population with a ", 
+        tolower(variable_definition)), 
+      is.na(c1) ~ str_c(
+        "Number of civilian noninstitutionalized population with a ", 
+        tolower(variable_definition)))) 
+
+# Get metadata to be used to define df 
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+rm(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    category = "Demographics",
+    topic_area = "Population Characteristic", 
+    periodicity = "yearly", 
+    aggregation = case_when(
+      str_detect(variable_name, "_pct") ~ "percent", 
+      TRUE ~ "count"), 
+    format = case_when(
+      str_detect(variable_name, "_pct") ~ "percent", 
+      TRUE ~ "integer"), 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#disability",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = case_when(
+      aggregation == "percent" ~ "Percent of people", 
+      aggregation == "count" ~ "Number of people"), 
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/table?q=disability%20status&g=010XX00US,$0400000,$0500000", 
+    citation = "U.S. Census Bureau, American Community Survey, S1810 Disability Characteristics, 5-year estimate, county") 
+
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_disability")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S1810-Data.csv")) %>% 
+  select(year, GEO_ID, ends_with("E")) 
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+  fips = case_when(
+    str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+    str_detect(GEO_ID, "0100000") ~ "00", 
+    str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID, -NAME) %>% 
+  select(fips, year, everything())
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Add variable names
+df <- metadf %>% 
+  left_join(df)
+
+# Convert non-numeric values to NA and add value_codes of "D" (not disclosed) for entries with "N" 
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value == "N" ~ "D", 
+      TRUE  ~ NA), 
+    value = case_when(
+      value %in% c("N", "(X)", "-") ~ NA, 
+      TRUE ~ as.numeric(value)))
+
+# Divide percentages by 100 
+df <- df %>% 
+  mutate(
+    value = case_when(
+      str_detect(variable_name, "pct") ~ value/100, 
+      TRUE ~ value))
+
+# Add counties and states and additional variables
+df <- df %>%
+  left_join(county_state) %>% 
+  mutate(
+    category = "Demographics", 
+    topic_area = "Population Characteristic") %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define datasets 
+df_disability <- df
+meta_disability <- meta %>% 
+  select(-variable_code, -c1)
+```
+
+## School enrollment by grade level
+
+We use 5-year data from the [U.S. Census Bureau, American Community Survey, S1401 School Enrollment](https://data.census.gov/table?q=enrollment&g=010XX00US,$0400000,$0500000). We download data from 2013-2022. (Data is available starting in 2010). Due to challenges with multiple variable codes with the same variable description in 2012, we do not include these data. We select Geography, County, All Counties within United States and Puerto Rico, and State, All States within United States, Puerto Rico and the Island Areas, and Nation, United States and download table data. These data include national, state, and county-level estimates.
+
+An "N" entry in the estimate columns indicates that data for this geographic area cannot be displayed because the number of sample cases is too small. We code this as NA and indicate an "D" in the values_column for not disclosed. An "(X)" means that the estimate is not applicable or not available, we code this as NA. A value of "null" in the estimate means there is no data available for the requested geography, this is also coded as NA. An "-" entry in the estimate column indicates that either no sample observations or too few sample observations were available to compute an estimate. We code this as NA with no values_code.
+
+There is some confusion with these data as there are multiple variable codes/data with the same variable description. The issues are in 2012 variables related to enrolled in college or graduate school with multiple codes for the same variable description. In looking at the tables for the US online, there is the same duplication in the table without an explanation.
+
+```{r}
+
+# Import metadata for variables of interest
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_enrollment")
+files <- list.files(path = data_path,
+                    pattern = "Metadata",
+                    full.names = TRUE)
+meta <- map(files, 
+            ~read_csv(.x, 
+                      show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S1401-Column-Metadata.csv")) %>% 
+  filter(!str_detect(`Column Name`, "M$")) %>% 
+  rename(variable_code = `Column Name`, 
+         variable_description = Label)
+
+# Drop imputed values, and public/private breakdown and totals not related to percent in schools, and geoids
+meta <- meta %>% 
+  filter(!str_detect(variable_description, "IMPUTED!!|public|private|Total!!Estimate!!Population 18 years and over|Geography|Geographic Area Name"))
+
+# Keep only necessary elements of variable description 
+meta <- meta %>% 
+  mutate(
+    c1 = case_when(
+      str_detect(variable_description, "Percent") ~ "percent", 
+      TRUE ~ NA), 
+    c2 = case_when(
+      str_detect(variable_description, 
+                 "Population 18 years and over") ~ "population 18 years and over", 
+      str_detect(variable_description, 
+                 "Males 18 years and over!!") ~ "males 18 years and over", 
+      str_detect(variable_description, 
+                 "Females 18 years and over!!") ~ "females 18 years and over",
+           str_detect(variable_description, 
+                 "Population 18 to 24 years!!") ~ "population 18 to 24 years", 
+      str_detect(variable_description, 
+                 "Males 18 to 24 years!!") ~ "males 18 to 24 years", 
+      str_detect(variable_description, 
+                 "Females 18 to 24 years!!") ~ "females 18 to 24 years",
+      str_detect(variable_description, 
+                 "Population 3 years and over enrolled in school!!") ~ 
+        "population 3 years and over enrolled in school",
+      TRUE ~ NA), 
+    variable_description = 
+      str_remove_all(variable_description, 
+                     "Total!!Estimate!!|Kindergarten to 12th grade!!|Percent of age group enrolled in school!!|Males 18 years and over!!|Females 18 years and over!!|	
+Population 18 years and over!!|Population 18 to 24 years!!|Males 18 to 24 years!!|Females 18 to 24 years!!|Percent!!Estimate!!|Population 3 to 4 years!!|Population 5 to 9 years!!|Population 10 to 14 years!!|Population 15 to 17!!|Population 18 to 19 years!!|Population 20 to 24 years!!|Population 25 to 34 years!!|Population 35 years and over!!|Population enrolled in college or graduate school!!|Estimate!!Total!!|Estimate!!Percent!!|Population 3 years and over enrolled in school!!"), 
+    c2 = case_when(
+      variable_description %in% 
+        c("Nursery school, preschool", "Kindergarten to 12th grade", 
+          "Kindergarten", "Elementary: grade 1 to grade 4", 
+          "Elementary: grade 5 to grade 8", "High school: grade 9 to grade 12", 
+          "College, undergraduate", "Graduate, professional school") ~ "population 3 years and over enrolled in school", 
+      TRUE ~ c2))
+
+# 2013-2014 (e.g., "3 and 4 years") have different naming conventions for age groups than 2017-2022 (e.g., "3 to 4 year olds enrolled in school"), have variables that are percentages without percent in the variable description, and have ":" in elementary
+meta <- meta %>% 
+  mutate(
+    variable_description = case_when(
+        variable_description %in% 
+          c("3 and 4 years", "5 to 9 years", "10 to 14 years",  
+           "15 to 17 years", "18 and 19 years", "20 to 24 years", 
+           "25 to 34 years", "35 years and over") ~ 
+          str_replace(variable_description, "years", "year olds enrolled in school"), 
+      TRUE ~ variable_description), 
+    variable_description = str_remove_all(variable_description, ":"), 
+    c1 = case_when(
+      year %in% c("2013", "2014") & 
+        str_detect(c2, "18") ~ "percent", 
+      TRUE ~ c1))
+
+# Drop variables that are totals or are the percent of a total and have a value of (X)
+meta <- meta %>% 
+  filter(!variable_description %in% 
+           c("Males 18 years and over", "Females 18 years and over", 
+             "Population 18 to 24 years", "Males 18 to 24 years", 
+             "Females 18 to 24 years", "Population 3 to 4 years", 
+             "Percent of population 3 to 4 years", "Population 5 to 9 years", 
+             "Percent of population 5 to 9 years", "Population 10 to 14 years", 
+             "Percent of population 10 to 14 years", "Population 15 to 17", 
+             "Percent of population 15 to 17", "Population 18 to 19 years", 
+             "Percent of population 18 to 19 years", "Population 20 to 24 years", 
+             "Percent of population 20 to 24 years", "Population 25 to 34 years", 
+             "Percent of population 25 to 34 years", "Population 35 years and over", 
+             "Percent of population 35 years and over"))
+
+# Remove spaces after variables 
+meta <- meta %>% 
+  mutate(
+    variable_description = str_replace_all(variable_description, " +$", ""))
+
+# Create a variable definition 
+meta <- meta %>% 
+  mutate(
+    variable_definition = case_when(
+      is.na(c1) & is.na(c2) ~ variable_description, 
+      is.na(c1) & !is.na(c2) ~ str_c(c2, variable_description, 
+                                     sep = ", "), 
+      !is.na(c1) & is.na(c2) ~ str_c(c1, " of ", variable_description),
+      !is.na(c1) & !is.na(c2) ~ str_c(c1, " ", c2, ", ", variable_description)), 
+    variable_definition = str_to_sentence(variable_definition))
+
+# Create variable name and user friendly variable name, all variables start with "school enrollment"
+meta <- meta %>% 
+  mutate(
+    user_friendly_variable_name = 
+      str_remove_all(variable_description, " enrolled in school|Enrolled in "), 
+    user_friendly_variable_name = 
+      str_c("School enrollment, ", tolower(user_friendly_variable_name)), 
+    user_friendly_variable_name = case_when(
+      is.na(c1) & (is.na(c2) | !is.na(c2)) ~ user_friendly_variable_name, 
+      !is.na(c1) & is.na(c2) ~ str_c(user_friendly_variable_name, c1, sep = ", "),
+      !is.na(c1) & !is.na(c2) ~ str_c(user_friendly_variable_name, c2, c1, sep = ", ")),
+    user_friendly_variable_name = str_replace(
+      user_friendly_variable_name, 
+      "population 3 years and over enrolled in school, percent ", ", percent"), 
+    variable_name = 
+      tolower(str_replace_all(user_friendly_variable_name, 
+                              ", ", "_")), 
+    variable_name = str_replace_all(variable_name, 
+                                    " ", "_"), 
+    variable_name = str_replace(variable_name, "_percent","_pct"))
+
+# Get metadata to be used to define df 
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)
+rm(years)
+
+# Add additional variables
+meta <- meta %>% 
+  mutate(
+    category = "Demographics",
+    topic_area = "Population Characteristic", 
+    periodicity = "yearly", 
+    aggregation = case_when(
+      str_detect(variable_name, "_pct") ~ "percent", 
+      TRUE ~ "count"), 
+    format = case_when(
+      str_detect(variable_name, "_pct") ~ "percent", 
+      TRUE ~ "integer"), 
+    keywords = "American Community Survey|ACS|Census Bureau", 
+    hashtags = "#school|#education",
+    chart_type1 = "BarChart",
+    chart_type2 = "LineChartSeries", 
+    chart_axis_x1 = case_when(
+      aggregation == "percent" ~ "Percent of people", 
+      aggregation == "count" ~ "Number of people"), 
+    chart_axis_x2 = NA,
+    chart_axis_y1 = NA,
+    chart_axis_y2 = chart_axis_x2,
+    source = "U.S.Census Bureau, American Community Survey", 
+    url = "https://data.census.gov/table?q=enrollment&g=010XX00US,$0400000,$0500000", 
+    citation = "U.S. Census Bureau, American Community Survey, S1401 School Enrollment, 5-year estimate, county") 
+
+# Import data
+data_path <- list.dirs(path = "data_raw/foodaccess/ACS_enrollment")
+
+files <- list.files(path = data_path,
+                    pattern = "Data",
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, 
+                    show_col_types = FALSE)) %>%
+  set_names(basename(files)) %>% 
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>% 
+  mutate(year = str_remove(year, "ACSST5Y"), 
+         year = str_remove(year, ".S1401-Data.csv")) %>% 
+  select(year, GEO_ID, ends_with("E")) 
+
+# Get fips from GEO_ID and keep variable of interest
+df <- df %>% mutate(
+  fips = case_when(
+    str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+    str_detect(GEO_ID, "0100000") ~ "00", 
+    str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# For each year, there is a GEO_ID "Geography" without values, 
+# we drop these rows
+df <- df %>% filter(
+  GEO_ID != "Geography") %>% 
+  select(-GEO_ID, -NAME) %>% 
+  select(fips, year, everything())
+
+# Pivot longer
+df <- df %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Convert non-numeric values to NA and add value_codes of "D" (not disclosed) for entries with "N" 
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value == "N" ~ "D", 
+      TRUE  ~ NA), 
+    value = case_when(
+      value %in% c("N", "(X)", "-") ~ NA, 
+      TRUE ~ as.numeric(value)))
+
+# Add variable names, counties and states 
+df <- metadf %>% 
+  left_join(df, by = c("year", "variable_code")) %>%
+  left_join(county_state) %>% 
+  mutate(
+    category = "Demographics", 
+    topic_area = "Population Characteristic") %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Divide percentages by 100 
+df <- df %>% 
+  mutate(
+    value = case_when(
+      str_detect(variable_name, "pct") ~ value/100, 
+      TRUE ~ value))
+
+# Define datasets 
+df_enrollment <- df
+meta_enrollment <- meta %>% 
+  select(-variable_code, -c1)
+
+rm(meta, metadf)
+```
+
+## Rural-Urban Continuum Codes
+
+We use [2013 Rural-Urban Continuum Codes from the USDA Economic Research Service](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/) to better understand the rural-urban locations of these counties. The rural urban continuum code (RUCC) was used to divide producers into three categories of ruralness: metro (RUCC 7-9), metro-adjacent (RUCC 4-6), and nonmetro (RUCC 1-3) to account for the degree of urbanization and adjacency to a metro area.
+
+```{r}
+
+library(readxl)
+# Import RUCC data
+
+# Import and bind data in one data frame, add file name to indicate year
+df1 <- read_xls("data_raw/foodaccess/rucc/pr2003.xls") %>% 
+  mutate(fips = as.character(`FIPS Code`), 
+         rucc = `Rural-urban Continuum Code, 2003`, 
+         year = 2003) %>% 
+  select(fips, year, rucc)
+
+df2 <- read_xls("data_raw/foodaccess/rucc/ruralurbancodes2003.xls") %>% 
+  mutate(fips = `FIPS Code`, 
+         rucc = `2003 Rural-urban Continuum Code`, 
+         year = 2003) %>% 
+  select(fips, year, rucc)
+
+df3 <- read_xls("data_raw/foodaccess/rucc/ruralurbancodes2013.xls", 
+                sheet = "Rural-urban Continuum Code 2013") %>% 
+  mutate(fips = `FIPS`, 
+         rucc = `RUCC_2013`, 
+         year = 2013) %>% 
+  select(fips, year, rucc)
+
+df4 <- read_xlsx("data_raw/foodaccess/rucc/Ruralurbancontinuumcodes2023.xlsx", 
+                 sheet = "Rural-urban Continuum Code 2023") %>% 
+  mutate(fips = `FIPS`, 
+         rucc = `RUCC_2023`, 
+         year = 2013) %>% 
+  select(fips, year, rucc)
+
+df <- bind_rows(df1, df2, df3, df4)
+rm(df1, df2, df3, df4)
+
+# Define metro (RUCC 7-9), metro-adjacent (RUCC 4-6), nonmetro (RUCC 1-3) 
+df <- df %>%
+  mutate(county_type = case_when(
+    rucc %in% c(7,8,9) ~ "metro", 
+    rucc %in% c(4,5,6) ~ "metro-adjacent", 
+    rucc %in% c(1,2,3) ~ "rural")) %>% 
+  select(fips, county_type)
+
+# Create meta data 
+meta_rucc <- tibble(
+  category = "Food Access", 
+  topic_area = "Population Characteristic",
+  variable_name = "rucc", 
+  `2 pager title` = "Nutrition Security and Food Access", 
+  years = "2003|2013|2023",
+  user_friendly_variable_name = "Rural-urban continuum code", 
+  variable_definition = "Rural-Urban Continuum Codes distinguish U.S. metropolitan (metro) counties by the population size of their metro area, and nonmetropolitan (nonmetro) counties by their degree of urbanization and adjacency to a metro area", 
+  periodicity = "10 years",
+  aggregation = "count",  
+  format = "integer", 
+  keywords = "USDA|USDA ERS", 
+  hashtags = "#rural|#urban", 
+  chart_type1 = "BarChart", 
+  chart_type2 = NA, 
+  chart_axis_x1 = "RUCC code", 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "U.S. Department of Agriculture, Economic Research Service", 
+  citation = "U.S. Department of Agriculture, Economic Research Service, Rural-Urban Continuum Codes",
+  url = "https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+
+# Define dataframe and metadata 
+df_rucc <- df 
+
+```
+
+## Persistent Poverty Counties
+
+Data is from the [Community Development Financial Institutions Fund (CDFI)](https://www.cdfifund.gov/documents/geographic-reports), 2020 Persistent Poverty Counties.
+
+Persistent Poverty Counties (PPCs) are defined by Public Law Number 117--328 (enacted 12/29/2022) for the CDFI Fund as "any county, including county equivalent areas in Puerto Rico, that has had 20 percent or more of its population living in poverty over the past 30 years, as measured by the 1990 and 2000 decennial censuses and the 2016--2020 5- year data series available from the American Community Survey of the Bureau of the Census or any other territory or possession of the United States that has had 20 percent or more of its population living in poverty over the past 30 years, as measured by the 1990, 2000 and 2010 Island Areas Decennial Censuses, or equivalent data, of the Bureau of the Census."
+
+```{r}
+
+# Import persistent poverty counties
+df <- read_excel("data_raw/foodaccess/PPC_2020_ACS_Jan20_2023.xlsx", 
+                        sheet = "Sheet1", 
+                        range = cell_rows(2:397)) %>% 
+  clean_names() %>%
+  rename(fips = county_fips) %>% 
+  select(fips) %>% 
+  mutate(persistent_poverty = 1)
+
+# Join data 
+df <- left_join(county, df)
+
+# Create a dummy and factor variable to define persistent poverty counties
+df <- df %>% 
+  mutate(persistent_poverty = replace_na(persistent_poverty, 0))
+
+# define data 
+df_pp <- df
+
+# Create meta data 
+meta_pp <- tibble(
+  category = "Food access", 
+  topic_area = "Population Characteristic",
+  variable_name = "persistent_poverty", 
+  `2 pager title` = "Nutrition Security and Food Access", 
+  years = "2020",
+  user_friendly_variable_name = "Persistent poverty", 
+  variable_definition = "Any county that has had 20 percent or more of its population living in poverty over the past 30 years", 
+  periodicity = "every 3 years",
+  aggregation = "count",  
+  format = "integer", 
+  keywords = "CDFI|US Census", 
+  hashtags = "#poverty" , 
+  chart_type1 = "BarChart", 
+  chart_type2 = NA, 
+  chart_axis_x1 = "Persistent poverty counties", 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "Community Development Financial Institutions Fund", 
+  citation = "Community Development Financial Institutions Fund, 2020 Persistent Poverty Counties",
+  url = "https://www.cdfifund.gov/documents/geographic-reports", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+```
+
+## Combine all data and write to file
+
+```{r}
+rm(meta, df)
+
+# Get metadata file for all data
+meta_foodaccess <- mget(ls(pattern = "^meta")) %>% 
+  keep(~is.data.frame(.x)) %>% 
+  bind_rows() %>% 
+  mutate(
+    `2 pager title` = "Nutrition Security and Food Access", 
+    last_update_date = "1/30/24") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+
+# Get df for all 
+df_foodaccess <- mget(ls(pattern = "^df")) %>% 
+  keep(~is.data.frame(.x)) %>%
+  bind_rows()
+
+# Drop rows with no data
+df_foodaccess <- df_foodaccess %>%
+  filter(!(is.na(value) & is.na(value_codes)))
+
+# write to file 
+write_csv(meta_foodaccess, "data_final/meta_foodaccess.csv")
+write_csv(df_foodaccess, "data_final/df_foodaccess.csv")
+```

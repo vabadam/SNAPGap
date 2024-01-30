@@ -1,0 +1,15 @@
+# Introduction {.unnumbered}
+
+This book will provide researchers with information on all of the data and code used to generate the data found in the [Data Warehouse](https://localfoodeconomics.com/data/access-the-data/) and the [Food and Agriculture Mapper and Explorer](https://localfoodeconomics.com/data/food-and-agriculture-data-explorer/). A detailed description of each data set is provided, including links to the original data files, and code used to manipulate data. All code and output files are also available on [GitHub](https://github.com/FoodSystemsModeling/DataWarehouse).
+
+All publicly-available original data sets are not on GitHub. Readers can access data sets by following the links provided in the code or they can be found in our [FAME Dropbox folder](https://www.dropbox.com/scl/fo/zpxmg4ka2j7iol1bxrtsn/h?dl=0&rlkey=vshhwvzb2ukpu9dvn06z14o5x). Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in the Dropbox folder.
+
+This document is one component in the creation of a Local and Regional Food Systems (LRFS) Data Warehouse to support thriving and informed local and regional food sectors. Teams of researchers and community partners reviewed and compiled available data using an equity lens into a single data warehouse to facilitate analysis and visualization.
+
+## Data contributions
+
+We will accept suggestions of data to add to our data repository and website. Please follow instructions, as described on [localfoodeconomics.com](https://localfoodeconomics.com/data/recommendations/), to submit a request to add data.
+
+## Acknowledgements
+
+We wish to thank Ela Rausch for her continued guidance and leadership with developing an equity framework for the local and regional food system data. We would also like to thank the Data Elevates team, especially Prem Durairaj and Xan Paxton, for their support with the development of the [Food and Agriculture Mapper and Explorer](https://localfoodeconomics.com/data/food-and-agriculture-data-explorer/).

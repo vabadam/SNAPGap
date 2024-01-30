@@ -1,0 +1,1126 @@
+---
+author: "Allison Bauman"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
+```
+
+# Business Development and Infrastructure
+
+The Local and Regional Food Systems Data Warehouse contains data indicators related to [business development and infrastructure](https://localfoodeconomics.com/wp-content/uploads/2022/10/BusinessDevelopment-and-Infrastructure-Brief_final.pdf) that can help researchers, practitioners, and policymakers understand the resources available (and opportunities for resources) in the local food supply chain. We anticipate these data being most useful to organizations working to understand and increase capacity to process, store, distribute, and purchase more regional food. Access to these data will support stakeholders as they develop proposals for funding, communicate the importance and broader context of their work to stakeholders and policy makers, and establish evaluation protocols of their own.
+
+Data include:
+
+-   Food hubs data, which include geographical data on the number and location of food hubs.
+-   Meat and poultry data, which document the number and location of USDA certified meat and poultry processors.
+-   Storage data, which include the number of public and private refrigerated warehouses.
+-   Institutions data, which include the number of school food authorities with edible gardens and serving local food, dollars spent on local food, and number and location of institutions and institutional buyers.
+
+There is a well-documented association between nutritious food availability and intake of those foods. Food stores differ in the amount of nutritious and fresh food they carry. Research shows that neighborhood racial composition and poverty levels are both associated with food store availability. Decades of discriminatory practices in real estate have led neighborhoods with high numbers of low-income residents, and neighborhoods made up predominantly of residents who are Black, Indigenous, and people of color, to have fewer high quality food stores and more low-quality food stores.
+
+Additionally, it is important to acknowledge where consolidation exists along the supply chain and how it impacts consumers and producers. In the meat industry, for example, four processing firms control 55-85% of the market for beef, pork, and chicken. This kind of consolidation means that a few players have disproportionate power over what farmers receive for their product and what consumers pay for it. Larger food corporations also dominate grocery aisles by offering financial incentives to grocery stores for carrying their product.
+
+Site users are encouraged to acknowledge the systemic factors that influence the geographic distribution of food markets and food infrastructure and to seek out opportunities to support policy and program changes that improve these inequities. When presenting data, we encourage disaggregation by individual race, ethnicity, and cultural group wherever possible. Aggregation of data can mask important differences that might be relevant for understanding needs and crafting adequate program and policy solutions. We also encourage practices that invite community members to help contextualize data, share their personal stories, and amplify community solutions.
+
+## State and county data
+
+We use [tidycensus](https://walker-data.com/tidycensus/) to get state and county names by FIPS so they are uniform across all data sets.
+
+In the tidycensus data, there is no data for FIPS 02010 Aleutian Islands Census Area, Alaska. This FIPS is found in the Census of Agriculture. We add this fips to our county data based on the [Geographic Area Codes and Titles from the U.S. Bureau of Labor Statistics](https://www.bls.gov/cew/classifications/areas/qcew-area-titles.htm).
+
+To crosswalk zip codes to fips codes we use yearly 1st quarter ZIP-COUNTY data from the [HUD USPS zip code crosswalk files](https://www.huduser.gov/portal/datasets/usps_crosswalk.html). If a ZIP is in multiple counties, the crosswalk matches each zip to the county with the largest ratio of all addresses in the ZIP. It is not a perfect one-to-one match, but the best we can do with the available data. The HUD data does not including zip codes that exclusively serve PO Boxes. We match the missing data to another data set provided by [United States Zip Codes](https://www.unitedstateszipcodes.org/zip-code-database/) with the hopes of matching more zip codes to fips. This data set does not have the largest ratio of addresses, so we have to manually address any match with multiple fips for one zip.
+
+```{r}
+library(tidyverse, quietly = TRUE)
+library(janitor, quietly = TRUE)
+library(readxl, quietly = TRUE)
+
+# Get county and state fips, state name, county name 
+county <- tidycensus::fips_codes %>% 
+  unite("fips", 
+        c(state_code, county_code), 
+        sep = "", remove = FALSE) %>% 
+  rename(county_name = county) %>% 
+  select(fips, county_name, state_name)
+
+# Add 02010 Aleutian Islands Census Area, Alaska
+county <- county %>% 
+  add_row(fips = "02010", 
+          county_name = "Aleutian Islands Census Area", 
+          state_name = "Alaska", 
+          .after = 67)
+
+# Get state data and add "00" US
+state <- tidycensus::fips_codes %>% 
+  select(state_code, state_name) %>% 
+  rename(fips = state_code) %>% 
+  distinct() %>% 
+  add_row(fips = "00", state_name = "US")
+
+# Merge so we have county and state data in one data frame
+county_state <- bind_rows(county, state)
+
+# Manually add US as fips "00"
+county_state <- county_state %>% 
+  add_row(fips = "00", 
+          county_name = NA, 
+          state_name = "US")
+
+# Import county spatial data frame using Tigris
+county_sf <- tigris::counties(progress_bar = FALSE) %>% 
+  clean_names()
+
+## Download zip to fips crosswalk data 
+# Import data
+data_path <- list.dirs(path = "data_raw/zip")
+
+files <- list.files(path = data_path,
+                    pattern = "*.xlsx", 
+                    full.names = TRUE)
+
+# Function to import and bind data and make column names lower case include file name with year (some years have all capitals, some lower case)
+myfun <- function(x){
+  year <- basename(x)
+  read_xlsx(x) %>% 
+    rename_with(tolower) %>% 
+    mutate(year = year)
+}
+# Create a zip code file and create year variable
+zip <- map_df(files, myfun) %>% 
+  mutate(
+    year = str_remove_all(year, "ZIP_COUNTY_03|zip_county_03|.xlsx"), 
+    fips = county)
+
+# Get one fips per zip, use county with highest zip total ratio
+zip <- zip %>% 
+  group_by(year, zip) %>% 
+  filter(row_number() == which.max(tot_ratio)) %>% 
+  select(zip, fips) 
+
+# Import alternative zip code data base 
+county_alt <- tidycensus::fips_codes %>% 
+  unite("fips", 
+        c(state_code, county_code), 
+        sep = "", remove = FALSE) %>% 
+  select(state, fips, county)
+
+zip_alt <- read_csv("data_raw/zip/zip_code_database.csv") %>% 
+  mutate(zip = str_pad(zip, width = 5, side = "left", pad = "0")) %>%
+  left_join(county_alt, by = c("county", "state")) %>% 
+  select(zip, fips, county, state)
+
+rm(county_alt)
+```
+
+## Food Hubs
+
+We gather point level data from the [USDA Local Food Directories](https://www.usdalocalfoodportal.com/#directories) on [Food Hubs](https://www.usdalocalfoodportal.com/fe/fdirectory_foodhub/?source=fe&directory=foodhub&location=&x=&y=). The main challenge with this database is it is user reported and is not a comprehensive list of all organizations.
+
+We match the lat/long coordinates to county level data to provide counts by county, state, and US. We only keep data that was updated since 8/30/2020 (based on feedback from AMS). If a county has no reported locations in this database, our final data will show there are zero in the county. Data is presented both as point-level and aggregated to county/state/US.
+
+```{r}
+library(readxl, quietly = TRUE)
+library(sf, quietly = TRUE)
+library(lubridate, quietly = TRUE)
+
+# Import data
+df <- read_xlsx("data_raw/business_dev_infra/foodhub.xlsx")
+
+# Keep columns of interest, drop obs. with NA for lat/long, drop obs. not updated since 2020, add variable name
+df <- df %>% 
+  mutate(
+    variable_name = "number_food_hubs", 
+    update_time = as_date(update_time)) %>% filter(
+    update_time>"2020-08-30", 
+    !is.na(location_x), !is.na(location_y)) %>% 
+  select(
+    variable_name, listing_id, variable_name, 
+    listing_name, location_address, location_x, location_y)
+
+# Rename x and y, lat and long and make numeric
+df <- df %>% 
+  rename(lat = location_y,
+         long = location_x) %>% 
+  mutate(lat = as.numeric(lat), 
+         long = as.numeric(long))
+
+## Get FIPS codes from lat/long data using the spatial county data from the Tigris package, defined above as county_sf
+
+# make data frame into a spatial data frame and keep original lat/long variables
+df_sf <- df %>% 
+  st_as_sf(coords = c("long", "lat"),
+           crs = st_crs(county_sf), 
+           remove = FALSE)
+
+# intersect our spatial point-level data with the tigris county spatial data frame 
+intersected <- st_intersects(df_sf, county_sf)
+
+# get the fips code for each entry
+df_sf <- df_sf %>%
+  mutate(
+    intersection = as.integer(intersected), 
+    fips = county_sf$geoid[intersection]) 
+
+rm(intersected)
+
+# Turn back into a regular data frame
+df <- as_tibble(df_sf) %>%
+  select(!c(listing_id, geometry, intersection))
+
+# Group by variable name and join with county data so we can add a 0 value for those counties for each variable
+# group by variable name and nest
+nested_df <- df %>% 
+  group_by(variable_name) %>% 
+  nest()
+
+# Join nested data frame by fips for each variable and unnest and add a count
+nested_df <- nested_df %>% 
+  mutate(data = map(data , ~ full_join(., county, by = "fips"))) %>% 
+  unnest(cols = data) %>% 
+  mutate(value = 
+           case_when(is.na(listing_name) & is.na(location_address) ~ 0, 
+                     TRUE ~1))
+rm(df_sf)
+
+## Number of operations per county
+df_county <- nested_df %>% 
+  group_by(fips, variable_name, state_name, county_name) %>% 
+  summarise(value = sum(value)) 
+
+# Number of operations per state, add state fips code
+df_state <- df_county %>% 
+  group_by(variable_name, state_name) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(state)
+  
+# Number of operations in US
+df_us <- df_county %>% 
+  group_by(variable_name) %>% 
+  summarise(value = sum(value)) %>%
+  mutate(
+    fips = "00", 
+    state_name = "US", 
+    county_name = NA)
+
+# Join all data into one data frame 
+df_agg <- bind_rows(df_county, df_state, df_us)
+
+rm(df_county, df_state, df_us)
+
+# Add in additional columns for aggregated data and keep columns of interest
+df_agg <- df_agg %>% 
+  mutate(
+    category = "Processing & Distribution",
+    topic_area = "Food hubs",
+    year = "2023",
+    value_codes = NA) %>%  
+  select(fips, county_name, state_name, category, 
+         topic_area, year, variable_name, value, 
+         value_codes)
+
+# Define food retail data frame 
+df_food_hub <- df_agg
+rm(df_agg)
+
+# Create point-level data frame
+# Add in additional columns for point-level data and keep columns of interest
+df <- nested_df %>% 
+  mutate(
+    category = "Processing & Distribution",
+    topic_area = "Food hubs",
+    variable_name = "location_food_hubs", 
+    org_type = topic_area, 
+    year = "2023", 
+    value_codes = NA) %>%
+  rename(
+    org_address = location_address, 
+    org_name = listing_name) %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, 
+    lat, long, org_name, 
+    org_type, org_address, value_codes)
+    
+rm(nested_df)
+
+# Drop obs. with no data and define food retail point-level data frame 
+df_food_hub_point <- df %>% 
+  filter(!is.na(lat))
+
+# Create meta data 
+meta_food_hub <- tibble(
+  category = "Processing & Distribution", 
+  topic_area = "Food hubs",
+  variable_name = c("number_food_hubs", "location_food_hubs"), 
+  `2 pager title` = "Business Development and Infrastructure", 
+  years = "2023",
+  user_friendly_variable_name = c("Food hubs, count", "Food hubs, by location"), 
+  variable_definition = c("Number of food hubs", "Location of food hubs"), 
+  periodicity = "continuously updated",
+  aggregation = c("count", "point"),  
+  format = c("integer", "point"), 
+  keywords = "USDA|USDA AMS|local food directory", 
+  hashtags = "#shoplocal|#eatlocal|#supportlocal" , 
+  chart_type1 = case_when(
+      format == "point" ~ NA, 
+      TRUE ~ "BarChart"), 
+  chart_type2 = NA, 
+  chart_axis_x1 = case_when(
+      str_detect(variable_name, "point") ~ NA, 
+      TRUE ~ "Number of businesses"), 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "U.S. Department of Agriculture, Local Food Directories", 
+  citation = "U.S. Department of Agriculture, Local Food Directories",
+  url = "https://www.usdalocalfoodportal.com/#directories", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+      
+rm(df, meta_point)
+```
+
+## USDA meat processors
+
+We gather point level data from the [U.S. Department of Agriculture, Food Safety and Inspection Service, Meat, Poultry and Egg Production Inspection Directory](https://www.fsis.usda.gov/inspection/establishments/meat-poultry-and-egg-product-inspection-directory) and aggregate data at the county, state and U.S. level. Data is continuously updated. We download the data directly from the map as it contains latitude and longitude. Click on the download icon on the botton of the map (second icon from the right), Data, Download (top right). The data set is called Tribal Land_data, but contains information for both Tribal Lands and for establishments, we only use the latter. Save the file as a "csv".
+
+For the point data, we keep all observations. For the counts of processors per county/state/US, we drop all observations with duplicate business addresses. A business gets a listing for each type of processing they do, we only keep one observation for each business address to avoid double counting.
+
+```{r}
+
+# import data, rename lat/long and keep columns of interest
+df <- 
+  read_csv("data_raw/business_dev_infra/Tribal Land_data.csv") %>% 
+  clean_names() 
+
+# drop tribal lands data 
+df <- df %>% 
+  filter(!is.na(address_line1))
+
+# create one variable for address 
+df <- df %>% 
+  mutate(
+    address = str_c(address_line1, city_state, sep = ", "), 
+    address = str_c(address, " ", postal_code))
+
+# Rename lat and long
+df <- df %>% 
+  rename(lat = latitude_generated,
+         long = longitude_generated)
+
+## Get FIPS codes from lat/long data using the spatial county data from the Tigris package, defined above as county_sf
+# make data frame into a spatial data frame and keep original lat/long variables
+df_sf <- df %>% 
+  st_as_sf(coords = c("long", "lat"),
+           crs = st_crs(county_sf), 
+           remove = FALSE)
+
+# intersect our spatial point-level data with the tigris county spatial data frame 
+intersected <- st_intersects(df_sf, county_sf)
+
+# get the fips code for each entry
+df_sf <- df_sf %>%
+  mutate(
+    intersection = as.integer(intersected), 
+    fips = county_sf$geoid[intersection]) 
+
+rm(intersected)
+
+# Turn back into a regular data frame
+df <- as_tibble(df_sf) %>%
+  select(!c(geometry, intersection))
+
+# Keep variables of interest and variable name
+df <- df %>% 
+  select( 
+    fips, establishment_name, inspection_activities, address, lat, long) %>% 
+  mutate(
+    variable_name = "number_meat_processors")
+
+# Join nested data frame by fips for each variable and unnest and add a count
+df <- county %>% 
+  left_join(df) %>%
+  mutate(
+    value = case_when(
+     is.na(establishment_name) ~ 0, 
+      TRUE ~ 1))
+
+rm(df_sf)
+
+## Number of operations per county
+df_county <- df %>% 
+  group_by(fips, state_name, county_name, variable_name) %>% 
+  summarise(value = sum(value)) 
+
+# Number of operations per state, add state fips code
+df_state <- df_county %>% 
+  group_by(state_name, variable_name) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(state)
+  
+# Number of operations in US
+df_us <- df_county %>% 
+  group_by(variable_name) %>%
+  summarise(value = sum(value)) %>%
+  mutate(
+    fips = "00", 
+    state_name = "US", 
+    county_name = NA)
+
+# Join all data into one data frame 
+df_agg <- bind_rows(df_county, df_state, df_us)
+
+rm(df_county, df_state, df_us)
+
+# Add in additional columns for aggregated data and keep columns of interest
+df_agg <- df_agg %>% 
+  mutate(
+    category = "Processing & Distribution",
+    topic_area = "Meat and Poultry",
+    year = "2023",
+    value_codes = NA) %>%  
+  select(fips, county_name, state_name, category, 
+         topic_area, year, variable_name, value, 
+         value_codes)
+
+# Define data
+df_meat_processor <- df_agg
+rm(df_agg)
+
+# Create point-level data frame
+# Add in additional columns for point-level data and keep columns of interest
+df <- df %>% 
+  mutate(
+    category = "Processing & Distribution",
+    topic_area = "Meat and Poultry",
+    variable_name = "location_meat_processing", 
+    org_type = topic_area, 
+    year = "2023", 
+    value_codes = NA) %>%
+  rename(
+    org_address = address, 
+    org_name = establishment_name, 
+    description = inspection_activities) %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, 
+    lat, long, org_name, 
+    org_type, org_address, value_codes)
+    
+rm(nested_df)
+
+# Drop obs. with no data and define food retail point-level data frame 
+df <- df %>% 
+  filter(!is.na(lat))
+
+# Name point data 
+df_meat_processor_point <- df
+
+# Create meta data 
+meta_meat_processing <- tibble(
+  category = "Processing & Distribution", 
+  topic_area = "Meat and Poultry",
+  variable_name = c("number_meat_processing", "location_meat_processing"), 
+  `2 pager title` = "Business Development and Infrastructure", 
+  years = "2023",
+  user_friendly_variable_name = c("Food hubs, count", "Food hubs, by location"), 
+  variable_definition = c("Number of meat processors", "Location of meat processors"), 
+  periodicity = "continuously updated",
+  aggregation = c("count", "point"),  
+  format = c("integer", "point"), 
+  keywords = "USDA|USDA FSIS|USDA inspected", 
+  hashtags = "#meat" , 
+  chart_type1 = case_when(
+      format == "point" ~ NA, 
+      TRUE ~ "BarChart"), 
+  chart_type2 = NA, 
+  chart_axis_x1 = case_when(
+      str_detect(variable_name, "point") ~ NA, 
+      TRUE ~ "Number of businesses"), 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "U.S. Department of Agriculture, Food Safety and Inspection Service", 
+  citation = "U.S. Department of Agriculture, Food Safety and Inspection Service, Meat, Poultry and Egg Product Inspection Directory",
+  url = "https://www.fsis.usda.gov/inspection/establishments/meat-poultry-and-egg-product-inspection-directory", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+      
+rm(df, meta_point)
+```
+
+## Location and number of colleges and universities
+
+We gather data from the from [IES National Center for Education Statistics](https://nces.ed.gov/ipeds/use-the-data), [complete data files](https://nces.ed.gov/ipeds/datacenter/DataFiles.aspx?gotoReportId=7&fromIpeds=true&sid=a2756b62-7cff-4712-b8eb-436cc96dafc0&rtid=7). We download 2022 data, Institutional Characteristics, Directory Information, HD2022 data file.
+
+Drop FIPS 000-2, Micronesia.
+
+```{r, message=FALSE}
+
+# Import data and keep columns of interest
+df <- read_csv("data_raw/business_dev_infra/hd2022.csv") %>% 
+  clean_names() %>%
+  select(unitid, latitude, longitud, fips, countycd, instnm, 
+         addr, city, stabbr, zip, webaddr) %>% 
+  rename(state_fips = fips, 
+         lat = latitude, 
+         long = longitud) %>% 
+  mutate(fips = str_pad(countycd, width = 5, side = "left", pad = "0"),
+        state_fips = str_pad(state_fips, width = 2, side = "left", pad = "0")) %>%
+  filter(fips != "000-2") %>%
+  select(!countycd)
+
+## Get FIPS codes from lat/long data using the spatial county data from the Tigris package, defined above as county_sf
+# make data frame into a spatial data frame and keep original lat/long variables
+df_sf <- df %>% 
+  st_as_sf(coords = c("long", "lat"),
+           crs = st_crs(county_sf), 
+           remove = FALSE)
+
+# intersect our spatial point-level data with the tigris county spatial data frame 
+intersected <- st_intersects(df_sf, county_sf)
+
+# get the fips code for each entry
+df_sf <- df_sf %>%
+  mutate(
+    intersection = as.integer(intersected), 
+    fips = county_sf$geoid[intersection]) 
+
+rm(intersected)
+
+# Turn back into a regular data frame
+df <- as_tibble(df_sf) %>%
+  select(!c(geometry, intersection))
+
+# Add county and state names and get zeros for counties with no entries
+df <- county %>% left_join(df)
+
+# Add variables
+df <- df %>%
+  mutate(
+    org_name = instnm, 
+    org_address = str_c(addr, city, stabbr, sep = ", "), 
+    org_address = str_c(org_address, zip, sep = " "), 
+    org_type = "Colleges and Universities") %>%
+  select(fips, state_name, county_name, 
+         lat, long, org_name, 
+         org_address)
+
+# define point level dataframe and drop counties without data
+df_college_point <- df %>% 
+  mutate(
+    variable_name = "location_colleges_universities") %>% 
+  filter(!is.na(lat))
+
+## Number of operations per county
+df_county <- df %>% 
+  mutate(
+    value = 1, 
+    variable_name = "number_colleges_universities") %>% 
+  group_by(fips, variable_name, state_name, county_name) %>% 
+  summarise(value = sum(value)) 
+
+# Number of operations per state, add state fips code
+df_state <- df_county %>% 
+  group_by(variable_name, state_name) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(state)
+  
+# Number of operations in US
+df_us <- df_county %>% 
+  group_by(variable_name) %>% 
+  summarise(value = sum(value)) %>%
+  mutate(
+    fips = "00", 
+    state_name = "US", 
+    county_name = NA)
+
+# Join all data into one data frame 
+df_agg <- bind_rows(df_county, df_state, df_us)
+
+rm(df_county, df_state, df_us)
+
+# Add in additional columns for aggregated data and keep columns of interest
+df_agg <- df_agg %>% 
+  mutate(
+    category = "Institutions",
+    topic_area = "Institutions",
+    year = "2022",
+    value_codes = NA) %>%  
+  select(fips, county_name, state_name, category, 
+         topic_area, year, variable_name, value, 
+         value_codes)
+
+# Define food retail data frame 
+df_college <- df_agg
+rm(df_agg)
+
+# Create meta data 
+meta_college <- tibble(
+  category = "Institutions", 
+  topic_area = "Institutions",
+  variable_name = c("number_colleges_universities",
+                    "location_colleges_universities"), 
+  `2 pager title` = "Business Development and Infrastructure", 
+  years = "2022",
+  user_friendly_variable_name = c("Colleges and Universities, count", "Colleges and Universities, by location"), 
+  variable_definition = c("Number of colleges and universities", "Location of colleges and universities"), 
+  periodicity = "yearly",
+  aggregation = c("count", "point"),  
+  format = c("integer", "point"), 
+  keywords = "IES NCES|IPEDS|Higher education", 
+  hashtags = "#highered" , 
+  chart_type1 = case_when(
+      format == "point" ~ NA, 
+      TRUE ~ "BarChart"), 
+  chart_type2 = NA, 
+  chart_axis_x1 = case_when(
+      str_detect(variable_name, "point") ~ NA, 
+      TRUE ~ "Number of businesses"), 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "IES National Center for Education Statistics", 
+  citation = "IES National Center for Education Statistics, complete data files",
+  url = "https://nces.ed.gov/ipeds/datacenter/DataFiles.aspx?gotoReportId=7&fromIpeds=true&sid=a2756b62-7cff-4712-b8eb-436cc96dafc0&rtid=7", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+      
+rm(df, meta_point)
+
+```
+
+## Number of K-12 schools
+
+Data from [IES National Center for Education Statistics](https://nces.ed.gov/ccd/files.asp), school-level data. Data includes all private and public K-12 schools, with address and zip code. We gather data from 2015/2016 to 2022/2023 and calculate the number of schools in each county, state, and U.S.
+
+To crosswalk zip codes to fips codes we use yearly 1st quarter ZIP-COUNTY data from the [HUD USPS zip code crosswalk files](https://www.huduser.gov/portal/datasets/usps_crosswalk.html). ZIP codes that only serve PO Boxes will not appear in the files. Data missing a FIPS is 1,792 (\~100-400 observations per year). These schools do not appear in the final data frame.
+
+```{r}
+
+# Import school and bind data in one data frame
+data_path <- list.dirs(path = "data_raw/business_dev_infra/k12")
+
+files <- list.files(path = data_path,
+                    pattern = "*.csv",
+                    full.names = TRUE, 
+                    recursive = TRUE) 
+
+df <- files %>% 
+  map(~read_csv(., 
+                col_types = cols(PHONE = col_character()),
+                show_col_types = FALSE)) %>%
+  bind_rows() %>% 
+  clean_names() %>%
+  select(school_year, fipst, seaname, 
+         lea_name, sch_name, lstreet1, lcity, lstate, lzip, mzip) %>% 
+  mutate(
+    school_year = case_when(
+      is.na(school_year) ~ "2015-2016", 
+      TRUE ~ school_year))
+
+# Merge data frame with zip codes - match years based on the first year in the school year (e.g., SY2012-2013 is matched to 2012)
+df <- df %>% 
+  rename(zip = lzip) %>%
+  mutate(
+    year = str_sub(school_year, start = 1, end = 4)) %>%
+  left_join(zip, by = c("year", "zip"))
+
+# Merge with secondary zip code data 
+df <- df %>% 
+  left_join(zip_alt, by = "zip") %>% 
+  mutate(
+    fips = coalesce(fips.x, fips.y))
+
+# Drop missing observations 
+df <- df %>% 
+  filter(!is.na(fips))
+
+# Rename year school year 
+df <- df %>% 
+  mutate(
+    year = school_year)
+
+# Count number per county 
+df_county <- df %>% 
+  group_by(year, fips) %>% 
+  summarise(value = n()) 
+
+# Count number per state
+df_state <- df %>% 
+  group_by(year, fipst) %>% 
+  summarise(value = n()) %>% 
+  rename(fips = fipst)
+
+# Count number in U.S. 
+df_US <- df %>% 
+  group_by(year) %>% 
+  summarise(value = n()) %>% 
+  mutate(fips = "00")
+
+# Bind data and add county/state names 
+df <- bind_rows(df_county, df_state, df_US) %>%
+  left_join(county_state) %>% 
+  ungroup()
+
+# Add additional variables
+df <- df %>%
+  mutate(
+    variable_name = "number_k12_schools", 
+    category = "Institutions",
+    topic_area = "Institutions",
+    value_codes = NA) %>%  
+  select(fips, county_name, state_name, category, 
+         topic_area, year, variable_name, value, 
+         value_codes)
+
+# Define data frame 
+df_k12 <- df
+rm(df, df_county, df_state, df_US)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- df_k12 %>% 
+  distinct(year) %>%
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- df_k12 %>% 
+  select(variable_name) %>% 
+  distinct() %>% 
+  bind_cols(years)
+
+# Create meta data 
+meta_k12 <- meta %>% 
+  mutate(
+    category = "Institutions", 
+    topic_area = "Institutions",
+    variable_name = "number_k12_schools", 
+    `2 pager title` = "Business Development and Infrastructure", 
+    user_friendly_variable_name = "K-12 schools, count",
+    variable_definition = "Number of K-12 schools",
+    periodicity = "yearly",
+    aggregation = "count",  
+    format = "integer", 
+    keywords = "IES NCES|IPEDS", 
+    hashtags = "#k12" , 
+    chart_type1 = "BarChart", 
+    chart_type2 = NA, 
+    chart_axis_x1 = "Number of schools", 
+    chart_axis_x2 = NA, 
+    chart_axis_y1 = NA, 
+    chart_axis_y2 = NA,
+    source = "IES National Center for Education Statistics", 
+    citation = "IES National Center for Education Statistics school-level data",
+    url = "https://nces.ed.gov/ccd/files.asp", 
+    last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+```
+
+# Farm to school
+
+We gather data from the [U.S. Department of Agriculture, Food and Nutrition Service (USDA FNS), Farm to School Census](https://farmtoschoolcensus.fns.usda.gov/) on the the number of school food authorities (SFAs) serving local food, with edible gardens, with salad bars, with salad bars serving local foods, and the dollars spent on local foods by SFA. We provide data from 2019, the most recent Farm to School Census.
+
+The FTS Census has data for each SFA and the geographic identifier they have provided is the ZIP code. To match SFA to a single county, we use a ZIP to County crosswalk from [U.S. Department of Housing and Urban Development](https://www.huduser.gov/portal/datasets/usps_crosswalk.html). If a ZIP is in multiple counties, the crosswalk matches each zip to the county with the largest ratio of all addresses in the ZIP. It is not a perfect one-to-one match, but the best we can do with the available data.
+
+We drop the 63 observations that are missing zip codes. We remove "-" from zip codes that have "-" at the end. After this, the HUD data is missing fips codes for 56 observations. This could be due to the HUD data not including zip codes that exclusively serve PO Boxes. We match the missing data to another data set provided by [United States Zip Codes](https://www.unitedstateszipcodes.org/zip-code-database/) and are able to match a few more.
+
+The remaining missing data is based on incorrect zip codes. These are found manually and the fips code is replace manually. Incorrect zip codes, county found manually based on correct zip code:
+
+-   1536gn7, Boone Co BD Of EDucation
+-   307w0st, Eagle County Re 50
+-   3186tx4 Woodward Youth Corporation - Forest Ridge
+-   328gjhy Hollister R-V
+-   329dbup Clancy Elementary
+-   424hpu9 Pittsfield Public Schools
+-   424zv63 Norfolk County Agricultural
+-   512mck9 Walton County
+-   544yw6z Dillon 03
+-   64781jw The Settlement Club
+-   647b61q Yoakum ISD
+-   647w9fh City View ISD
+-   702esa8 Alaska Gateway School District
+-   7044uze John F. Kennedy Day School
+-   70487n6 Kyrene Elementary District
+-   713hzv3 Department Of Defense Education Activities (Dodea) Guam
+
+```{r, message=FALSE}
+
+# Read in the data
+df <- read_csv(
+  "data_raw/business_dev_infra/FarmtoSchool/census2019_public_use_with_weight.csv") %>% 
+  clean_names()
+
+# Clean zip codes in fts data: remove "-" and drop obs. with zip NA
+df <- df %>% 
+  rename(zip = sfa_zip) %>% 
+  mutate(
+  zip = str_remove(zip, "-$")) %>% 
+  filter(
+    !is.na(zip)) 
+
+# Join with zip code data to add fips
+zip19 <- zip %>% 
+  filter(year == "2019")
+
+df <- df %>% 
+  left_join(zip19)
+rm(zip19)
+
+# Some data are missing, so we use another zip code file. This file does not have proportion of population so we only keep those obs that are distinct
+missing <- df %>% 
+  filter(is.na(fips)) %>% 
+  select(survey_id, sfa_name, sfa_state, zip) %>%
+  left_join(zip_alt, by = "zip") %>% 
+  distinct(survey_id, .keep_all = TRUE)
+
+# Manually fix issues, mainly due to incorrect zip codes 
+missing <- missing %>% mutate(
+  fips = ifelse(zip=="00978", "72139", ifelse(
+    zip=="50742", "54005", ifelse(
+      zip=="81613", "08037", ifelse(
+        zip=="50344", "19063", ifelse(
+          zip=="69672", "29213", ifelse(
+            zip=="59364", "30043", ifelse(
+              zip=="10202", "25003", ifelse(
+                zip=="02168", "25021", ifelse(
+                  zip=="30658", "13297", ifelse(
+                    zip=="295655", "45033", ifelse(
+                      zip=="78858", "48453", ifelse(
+                        zip=="77997", "48285", ifelse(
+                          zip=="16306", "48485", ifelse(
+                            zip=="99870", "02240", ifelse(
+                              zip=="85491", "04017", ifelse(
+                                zip=="85828", "04013", ifelse(
+                                  zip=="96540", "66010", fips)))))))))))))))))) %>%
+  select(survey_id, fips)
+                                
+# Join missing data to original 
+df <- df %>% 
+  left_join(missing, by = "survey_id") %>% 
+  mutate(
+  fips = coalesce(fips.x, fips.y))
+
+rm(missing)
+
+# Change D (Don't know/Refused) to NA for salad bar questions  
+df <- df %>% mutate(
+  q7_1 = case_when(
+    q7_1=="D" ~ NA, 
+    TRUE ~ as.numeric(q7_1)), 
+  q8_1 = case_when(
+    q8_1=="D" ~ NA, 
+    TRUE ~ as.numeric(q8_1)))
+
+# Create new variables to combine activities for all meal programs and select columns of interest
+df <- df %>% mutate(
+  serve_local_food = ifelse(q24_1>0, 1, 0), 
+  school_garden = q4_3_16, 
+  salad_bar = ifelse(q7_1>0, 1, 0), 
+  local_salad_bar = ifelse(q8_1>0, 1, 0), 
+  total_food_cost = q37_1, 
+  local_food_cost = q38_1, 
+  local_food_cost_percent_total = local_food_cost/total_food_cost) %>% 
+  select(
+    fips, serve_local_food:local_salad_bar, 
+    local_food_cost, local_food_cost_percent_total) 
+
+# Number per county
+df_county <- df %>% 
+  group_by(fips) %>% 
+  summarise(across(serve_local_food:local_food_cost, 
+                   ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(county)
+
+# Number per state 
+df_state <- df_county %>% 
+  group_by(state_name) %>% 
+  summarise(across(serve_local_food:local_food_cost, 
+                   ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(state)
+  
+# Number in U.S. 
+df_US <- df_county %>% 
+  summarise(across(serve_local_food:local_food_cost, 
+                   ~sum(.x, na.rm = TRUE))) %>%
+  mutate(fips = "00", 
+         state_name = "US")
+
+# Bind data 
+df <- bind_rows(df_county, df_state, df_US)
+rm(df_county, df_state, df_US)
+
+# Pivot longer and add columns 
+df <-  df %>% 
+  pivot_longer(
+    cols = !c(fips, state_name, county_name), 
+    names_to = "variable_name", 
+    values_to = "value") %>% 
+  mutate(
+    category = "Institutions", 
+    topic_area = "Institutions", 
+    year = "SY2018-2019") %>% 
+  select(
+      fips, topic_area, category, year, variable_name, value) 
+
+# Define data frame 
+df_fts <- df
+
+# Create meta data 
+meta_fts <- df %>% 
+  distinct(variable_name, category, topic_area, year) %>%
+  mutate(
+    `2 pager title` = "Business Development and Infrastructure", 
+    years = year, 
+    user_friendly_variable_name = case_when(
+      variable_name == "serve_local_food" ~ 
+        "School food authorities serving local food, count", 
+      variable_name == "school_garden" ~ 
+        "School food authorities with a school garden, count", 
+      variable_name == "local_food_cost" ~
+        "School food authorities, dollars spent on local food", 
+      variable_name == "salad_bar" ~ 
+        "School food authorities with salad bars, count", 
+      variable_name == "local_salad_bar" ~ 
+        "School food authorities with salad bars serving local food, count"),
+  variable_definition = case_when(
+     variable_name == "serve_local_food" ~ 
+        "Number of SFAs (school food authorities) serving local food", 
+      variable_name == "school_garden" ~ 
+        "Number of SFAs with edible gardens", 
+      variable_name == "local_food_cost" ~
+        "Dollars spent on local foods by SFAs", 
+      variable_name == "salad_bar" ~ 
+        "SFAs with salad bars", 
+      variable_name == "local_salad_bar" ~ 
+        "SFAs with salad bars serving local food"), 
+  periodicity = "yearly",
+  aggregation = "count",  
+  format = "integer", 
+  keywords = "USDA|FNS|School food", 
+  hashtags = "#farmtoschool" , 
+  chart_type1 = "BarChart", 
+  chart_type2 = NA, 
+  chart_axis_x1 = case_when(
+    variable_name == "local_food_cost" ~ "Dollars spent",
+    TRUE ~ "Number of School Food Authorities"), 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "U.S. Department of Agriculture, Food and Nutrition Service", 
+  citation = "U.S. Department of Agriculture, Food and Nutrition Service, Farm to School Census",
+  url = "https://farmtoschoolcensus.fns.usda.gov/", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+  
+```
+
+## Cold storage data
+
+Data on the capacity of refrigerated warehouses is from the [U.S. Department of Agriculture, Economics, Statistics, and Market Information System, Capacity of Refrigerated Warehouses](https://usda.library.cornell.edu/concern/publications/x059c7329). We import data on Refrigerated Warehouses by Type -- States and the United States from 2012-2022.
+
+It is not clear from the documentation what "-" means. We converted these to NA and put NA in the value codes variable.
+
+**Reliability**: Usable reports were received from about 650 firms which represent about 68 percent of the total capacity tabulated. The numbers published should be considered minimum figures as there are cold storage firms that are not known to NASS. Special care in identifying individual plants minimizes duplication. Survey data are also subject to non-sampling errors such as omissions and mistakes in reporting and processing the data. While these errors cannot be measured directly, they are minimized by a careful review of all reported data for consistency and reasonableness.
+
+**Survey procedures**: Questionnaires were mailed about the 25th of September 2021, to operators of over 960 public and private cold storage warehouses. Nine hundred and four firms met the qualifications that their warehouses were artificially cooled to a temperature of 50 degrees Fahrenheit or lower, normally stored food products for 30 days or more and stored one of the 110 commodities reported in the Monthly Cold Storage Report. The other firms who received questionnaires either did not qualify or the plants had ceased being cold storage facilities during the past two years. The list included specialized storage facilities meeting the 30-day requirement, such as fruit houses, dairy manufacturing plants, frozen fruit, fruit juice, and vegetable processors, and poultry and meat packing plants. Wholesalers, jobbers, packer branch houses, and frozen food processors whose entire inventories are turned over more than once a month were excluded. Firms that did not respond were mailed a second request and/or phoned or visited.
+
+File names:
+
+-   2012: rfwh_p05_t001.csv
+-   2014, 2016: rfwh_p01_t001.csv
+-   2018, 2020, 2022: rfwh_p05_t001.csv
+
+```{r, message=FALSE}
+ 
+# Import data
+data_path <- list.dirs(path = "data_raw/business_dev_infra/coldstorage")
+
+file_list <- "rfwh_p05_t001.csv|rfwh_p01_t001.csv|rfwh_p05_t001.csv"
+
+files <- list.files(path = data_path,
+                    pattern = file_list,
+                    full.names = TRUE)
+df <- map(files, 
+          ~read_csv(.x, skip = 6,
+                    show_col_types = FALSE)) %>%
+  set_names(dirname(files)) %>%
+  enframe(name = "year", value = "data") %>%
+  unnest(cols = data) %>%
+  mutate(year = str_sub(year, start = -4), 
+         year = case_when(
+           year == "0122" ~ "2022", 
+           year == "0120"  ~ "2020",
+           TRUE ~ year))
+
+# Change variable names
+df <- df %>% 
+  select(year, `...3`, `(number)...4`, `(number)...5`) %>% 
+  rename(
+    state_name = `...3`, 
+    public_refrigerated_warehouses = `(number)...4`, 
+    private_semi_private_refrigerated_warehouses = `(number)...5`) %>% 
+  filter(
+      !is.na(state_name) & state_name!="-  Represents zero.") %>% 
+  mutate(
+        public_refrigerated_warehouses = case_when(
+          public_refrigerated_warehouses=="-" ~ NA, 
+          TRUE  ~ as.numeric(public_refrigerated_warehouses)), 
+        private_semi_private_refrigerated_warehouses = case_when(
+          private_semi_private_refrigerated_warehouses=="-" ~ NA, 
+          TRUE ~ as.numeric(private_semi_private_refrigerated_warehouses)))
+
+# Add fips 
+df <- df %>% 
+  left_join(state)
+
+# Make data long 
+df <- df %>% pivot_longer(
+  cols = !c(year, fips, state_name),  
+  values_to = "value", 
+  names_to = "variable_name")
+
+# Rename US state name and fips 
+df <- df %>% 
+  mutate(
+    state_name = case_when(
+      state_name == "United States" ~ "US", 
+      TRUE ~ state_name), 
+    fips = case_when(
+      state_name == "US" ~ "00", 
+      TRUE ~ fips))
+
+# Add variables
+df <- df %>% 
+  mutate(
+    category = "Processing & Distribution", 
+    topic_area = "Storage", 
+    county_name = NA, 
+    value_codes = NA) %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
+
+# Define data frame 
+df_storage <- df
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- df %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- df %>% 
+  select(category, topic_area, variable_name) %>% 
+  distinct() %>% 
+  bind_cols(years)
+
+# Add additional variables
+meta_storage <- meta %>% 
+  mutate(
+    `2 pager title` = "Business Development and Infrastructure", 
+    user_friendly_variable_name = case_when(
+      variable_name == "public_refrigerated_warehouses" ~ 
+        "Refrigerated warehouses, public, count", 
+      variable_name == "private_semi_private_refrigerated_warehouses" ~ 
+        "Refrigerated warehouses, private and semi private, count"),
+  variable_definition = case_when(
+      variable_name == "public_refrigerated_warehouses" ~ 
+        "Number of public refrigerated warehouses", 
+      variable_name == "private_semi_private_refrigerated_warehouses" ~ 
+        "Number  of private/semi-private refrigerated warehouses"), 
+  periodicity = "Every 2 years",
+  aggregation = "count",  
+  format = "integer", 
+  keywords = "USDA|refrigeration", 
+  hashtags = "#warehouse|#supplychain" , 
+  chart_type1 = "BarChart",
+  chart_type2 = "LineChartSeries", 
+  chart_axis_x1 = "Number of refrigerated warehouses", 
+  chart_axis_x2 = NA,
+  chart_axis_y1 = NA,
+  chart_axis_y2 = chart_axis_x2,
+  source = "U.S. Department of Agriculture, Economics, Statistics, and Market Information System", 
+  citation = "U.S. Department of Agriculture, Economics, Statistics, and Market Information System, Capacity of Refrigerated Warehouses, Refrigerated Warehouses by Type",
+  url = "https://usda.library.cornell.edu/concern/publications/x059c7329", 
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+ 
+```
+
+## Combine all data and write to file
+
+```{r}
+rm(meta, df)
+
+# Get metadata file for all data
+meta_business_dev_infra <- 
+  mget(ls(pattern = "^meta")) %>% 
+  keep(~is.data.frame(.x)) %>% 
+  bind_rows() %>% 
+  mutate(
+    `2 pager title` = "Business Development and Infrastructure", 
+    last_update_date = "1/30/24") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+
+# Get df for all 
+df_business_dev_infra <- mget(ls(pattern = "^df")) %>% 
+  keep(~is.data.frame(.x)) %>% 
+  bind_rows() 
+
+# Drop rows with no data
+df_business_dev_infra <- df_business_dev_infra %>%
+  filter(!(is.na(value) & is.na(value_codes)))
+
+# write to file 
+write_csv(meta_business_dev_infra, "data_final/meta_business_dev_infra.csv")
+write_csv(df_business_dev_infra, "data_final/df_business_dev_infra.csv")
+```
