@@ -7,7 +7,7 @@ DataWarehouse.Rproj
 /.quarto/
 *.yml
 colorado_specific.qmd
-Icon
+Icon?
 
 ## Quarto stack
 /*_files/
