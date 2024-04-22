@@ -1,12 +1,11 @@
 ---
+title: Nutrition Security and Food Access
 author: "Allison Bauman"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
+#knitr::opts_chunk$set(eval = TRUE, message = FALSE, warning = FALSE)
 ```
-
-# Nutrition Security and Food Access
 
 The Local and Regional Food Systems Data Warehouse contains data indicators related to [nutrition security and food access](https://localfoodeconomics.com/wp-content/uploads/2022/10/Nutrition-Security-and-Food-Access-Brief_final.pdf) that can help researchers, practitioners, and policymakers better understand which households and communities have reliable access to nutritious and affordable food, and where access might be limited.
 
@@ -34,6 +33,7 @@ In the tidycensus data, there is no data for FIPS 02010 Aleutian Islands Census 
 ```{r}
 library(tidyverse, quietly = TRUE)
 library(janitor, quietly = TRUE)
+library(sf)
 
 # Get county and state fips, state name, county name 
 county <- tidycensus::fips_codes %>% 
@@ -60,12 +60,9 @@ state <- tidycensus::fips_codes %>%
 # Merge so we have county and state data in one data frame
 county_state <- bind_rows(county, state)
 
-# Manually add US as fips "00"
-county_state <- county_state %>% 
-  add_row(fips = "00", 
-          county_name = NA, 
-          state_name = "US")
-
+# Import county spatial data frame
+county_sf <- tigris::counties(progress_bar = FALSE) %>% 
+  clean_names()
 ```
 
 ## SNAP participation
@@ -129,12 +126,11 @@ df <- df %>%
     county_name = NA, 
     category = "Food Access", 
     topic_area = "Federal Nutrition Program", 
-    value_codes = NA, 
-    county_type = NA) %>% 
+    value_codes = NA) %>% 
   select(
     fips, county_name, state_name, 
     category, topic_area, 
-    year, variable_name, value, value_codes, county_type)
+    year, variable_name, value, value_codes)
 
 # Get list of years for meta data with a "|" between and add to metadata
 years <- df %>% 
@@ -263,25 +259,6 @@ meta1722 <- meta %>%
 meta <- bind_rows(meta1214, meta1516, meta1722)
 rm(meta1214, meta1516, meta1722)
 
-# Keep metadata for years, variable codes and names to determine vars to keep in df
-metadf <- meta %>% 
-  rename(variable_code = column_name,
-         variable_name = label)
-  
-# Get list of years for meta data with a "|" between and add to metadata
-years <- meta %>% 
-  distinct(year) %>% 
-  pull(year) %>% 
-  paste(collapse = "|") %>%
-  as_tibble() %>%
-  rename(years = value)
-
-# keep only distinct entries and add years 
-meta <- meta %>% 
-  select(-year) %>% 
-  distinct() %>% 
-  bind_cols(years)    
-
 # Add variables 
 meta <- meta %>% 
   mutate(
@@ -302,7 +279,25 @@ meta <- meta %>%
     variable_name = 
       str_c("snap_participation_rate_", variable_name)) %>%
   rename(variable_code = column_name)
+
+# Keep metadata for years, variable codes and names to determine vars to keep in df
+metadf <- meta %>% 
+  select(year, variable_code, variable_name)
   
+# Get list of years for meta data with a "|" between and add to metadata
+years <- meta %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# keep only distinct entries and add years 
+meta <- meta %>% 
+  select(-year) %>% 
+  distinct() %>% 
+  bind_cols(years)      
+
 # Define metadata for acs snap data and add columns
 meta <- meta %>% 
   mutate(
@@ -373,14 +368,13 @@ df <- df %>%
       TRUE ~ NA),
     value = case_when(
       value == "-" ~ NA, 
-      TRUE ~ value), 
-    value = as.numeric(value), 
+      TRUE ~ as.numeric(value)), 
     value = value/100)
 
 # Add state and county names 
 df <- df %>% left_join(county_state)
 
-# Add topic area and category and fips
+# Add variables 
 df <- df %>% 
   mutate(
     topic_area = "Federal Nutrition Program", 
@@ -528,7 +522,8 @@ Data that were not available, not applicable, or suppressed for specific countie
 
 # read in meta data 
 file_path <- "data_raw/foodaccess/FoodEnvironmentAtlas/VariableList.csv"
-meta <- read_csv(file_path) %>% 
+meta <- read_csv(file_path, 
+                 show_col_types = FALSE) %>% 
   clean_names()
 
 # Keep variables of interest and change variable name and units
@@ -591,11 +586,10 @@ meta <- meta %>%
       str_detect(var1, "low income & low access to store") ~ 
         "of people in a county with low income and living more than 1 mile from a supermarket or large grocery store if in an urban area, or more than 10 miles from a supermarket or large grocery store if in a rural area", 
       str_detect(var1, "households") ~ 
-        "of housing units in a county without a car and more than 1 mile from
-a supermarket or large grocery store",
+        "of housing units in a county without a car and more than 1 mile from a supermarket or large grocery store",
       TRUE ~ NA), 
     def3 = case_when(
-      	subcategory_name %in% c("Demographics", "Overall") ~ 
+      	subcategory_name %in% c("Demographics", "Overall", "Household Resources") ~ 
       	  " in a county living more than 1 mile from a supermarket or large grocery store if in an urban area, or more than 10 miles from a supermarket or large grocery store if in a rural area", 
       	TRUE ~ NA), 
     variable_definition = case_when(
@@ -607,7 +601,7 @@ a supermarket or large grocery store",
         str_detect(var1, "households") ~ 
         str_c(def1, def2),
       category_name == "Store Availability" ~
-        str_c("Number of ", tolower(variable_name), " in a county")))
+        str_c("Number of ", tolower(variable_name), " in a county"))) 
 
 # Define axis titles 
 meta <- meta %>% 
@@ -719,7 +713,8 @@ df_us_pop <- df_state_pop %>%
   group_by(year) %>% 
   summarise(population = sum(population)) %>% 
   mutate(
-    fips = "00")
+    fips = "00", 
+    state_name = "US")
 
 # Bind rows 
 pop <- bind_rows(df_state_pop, df_us_pop) %>% 
@@ -775,6 +770,11 @@ df <- df %>%
   select(
     fips, county_name, state_name, category, 
     topic_area, year, variable_name, value, value_codes)
+
+# Redefine meta variable names
+meta <- meta %>% 
+  mutate(
+    variable_name = str_sub(variable_name, 1, -3))
 
 # Define data frame 
 df_FEatlas <- df
@@ -1576,7 +1576,7 @@ meta <- meta %>%
     aggregation = "percent", 
     format = "percent", 
     keywords = "Feeding America|Map the Meal Gap|Hunger",
-    hashtags = "#endhugar|#foodinsecurity", 
+    hashtags = "#endhuger|#foodinsecurity", 
     chart_type1 = "LineChartSeries",
     chart_type2 = "BarChart", 
     chart_axis_x1 = NA, 
@@ -1590,8 +1590,7 @@ meta <- meta %>%
     chart_axis_y2 = NA,
     source = "Feeding America, Map the Meal Gap",
     url = "https://map.feedingamerica.org",
-    citation = "Gundersen, C., Strayer, M., Dewey, A., Hake, M., & Engelhard, E. (2023). Map the Meal Gap 2023: An Analysis of County and Congressional District Food Insecurity and County Food Cost in the United States in 2021. Feeding America", 
-    last_update_date = "12/12/23")
+    citation = "Gundersen, C., Strayer, M., Dewey, A., Hake, M., & Engelhard, E. (2023). Map the Meal Gap 2023: An Analysis of County and Congressional District Food Insecurity and County Food Cost in the United States in 2021. Feeding America")
 
 # Define data sets 
 meta_foodinsecurity <- meta
@@ -1785,7 +1784,7 @@ df <- df %>%
 
 # Add variable names, counties and states 
 df <- metadf %>% 
-  left_join(df) %>%
+  left_join(df, by = c("year", "variable_code")) %>%
   left_join(county_state) %>% 
   mutate(
     category = "Demographics", 
@@ -1863,9 +1862,9 @@ rm(meta1, meta2)
 meta <- meta %>% 
   mutate(
     v1 = case_when(
-      str_detect(variable_description, "Percent") | 
-        (year %in% c("2012", "2013", "2014", "2015", "2016") & 
-           variable_description == "60 years and over") ~ "percent", 
+      (str_detect(year, "2012|2013|2014|2015|2016") &  
+        str_detect(variable_description, "60 years and over")) | 
+        str_detect(variable_description, "Percent!!") ~ "percent", 
       TRUE ~ NA),  
     variable_description = str_remove(variable_description, 
                                       "Estimate!!Total!!"), 
@@ -1891,7 +1890,7 @@ meta <- meta %>%
                       " ", "_")),  
     user_friendly_variable_name = case_when(
       variable_description == "60 years and over" ~ "Population 60 years and over", 
-      variable_description == "60 years and over_pct" ~ 
+      variable_description == "60 years and over, percent" ~ 
         "Population 60 years and over, percent"), 
     variable_definition = case_when(
       str_detect(variable_description, "pct") ~ 
@@ -1916,6 +1915,10 @@ meta <- meta %>%
   distinct() %>% 
   bind_cols(years)
 rm(years)
+
+# Drop total population data 
+meta <- meta %>% 
+  filter(variable_name != "total_population")
 
 # Add additional variables
 meta <- meta %>% 
@@ -2085,11 +2088,29 @@ Estimate!!Percent with a disability!!Total civilian noninstitutionalized populat
     variable_description = case_when(
       is.na(c1) ~ variable_description, 
       TRUE ~ str_c(variable_description, ", ", c1)), 
-    variable_description = str_c("Disability, ", tolower(variable_description)), 
+    variable_description = str_c("Disability, ", 
+                                 tolower(variable_description)), 
     variable_description = case_when(
       variable_description == "Disability, total " ~ "Disability, total", 
       variable_description == "Disability, total , percent" ~ "Disability, total, percent",
       TRUE ~ variable_description))
+
+# Capitalize race 
+replace_pattern = c(white = "White", 
+                   `black or african american` = "Black or African American", 
+                   asian = "Asian", 
+                   `american indian and alaska native` = 
+                     "American Indian and Alaska Native", 
+                   `native hawaiian and other pacific islander` = 
+                     "Native Hawaiian and Other Pacific Islander",
+                   `hispanic or latino` = 
+                     "Hispanic or Latino") 
+
+meta <- meta %>% 
+  mutate(
+    variable_description = 
+      str_replace_all(variable_description, replace_pattern))
+
 
 # Add variable name and definition 
 meta <- meta %>%
@@ -2355,7 +2376,12 @@ meta <- meta %>%
       !is.na(c1) & !is.na(c2) ~ str_c(user_friendly_variable_name, c2, c1, sep = ", ")),
     user_friendly_variable_name = str_replace(
       user_friendly_variable_name, 
-      "population 3 years and over enrolled in school, percent ", ", percent"), 
+      "population 3 years and over enrolled in school, percent ", ", percent"),  
+    user_friendly_variable_name = case_when(
+      user_friendly_variable_name == "School enrollment, college or graduate school" & 
+        c2 != "population 18 to 24 years" ~ str_c(user_friendly_variable_name, 
+                                                  c2, sep = ", "),
+      TRUE ~ user_friendly_variable_name), 
     variable_name = 
       tolower(str_replace_all(user_friendly_variable_name, 
                               ", ", "_")), 
@@ -2406,7 +2432,7 @@ meta <- meta %>%
     chart_axis_y2 = chart_axis_x2,
     source = "U.S.Census Bureau, American Community Survey", 
     url = "https://data.census.gov/table?q=enrollment&g=010XX00US,$0400000,$0500000", 
-    citation = "U.S. Census Bureau, American Community Survey, S1401 School Enrollment, 5-year estimate, county") 
+    citation = "U.S. Census Bureau, American Community Survey, S1401 School Enrollment, 5-year estimate, county")
 
 # Import data
 data_path <- list.dirs(path = "data_raw/foodaccess/ACS_enrollment")
@@ -2475,14 +2501,23 @@ df <- df %>%
 # Define datasets 
 df_enrollment <- df
 meta_enrollment <- meta %>% 
-  select(-variable_code, -c1)
+  select(category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation)
+
 
 rm(meta, metadf)
 ```
 
 ## Rural-Urban Continuum Codes
 
-We use [2013 Rural-Urban Continuum Codes from the USDA Economic Research Service](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/) to better understand the rural-urban locations of these counties. The rural urban continuum code (RUCC) was used to divide producers into three categories of ruralness: metro (RUCC 7-9), metro-adjacent (RUCC 4-6), and nonmetro (RUCC 1-3) to account for the degree of urbanization and adjacency to a metro area.
+We use [2013 Rural-Urban Continuum Codes from the USDA Economic Research Service](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/) to better understand the rural-urban locations of these counties.
+
+One common way to use the rural urban continuum code (RUCC) is to divide it into three categories of ruralness: metro (RUCC 7-9), metro-adjacent (RUCC 4-6), and nonmetro (RUCC 1-3) to account for the degree of urbanization and adjacency to a metro area.
 
 ```{r}
 
@@ -2493,42 +2528,54 @@ library(readxl)
 df1 <- read_xls("data_raw/foodaccess/rucc/pr2003.xls") %>% 
   mutate(fips = as.character(`FIPS Code`), 
          rucc = `Rural-urban Continuum Code, 2003`, 
-         year = 2003) %>% 
+         year = "2003") %>% 
   select(fips, year, rucc)
 
 df2 <- read_xls("data_raw/foodaccess/rucc/ruralurbancodes2003.xls") %>% 
   mutate(fips = `FIPS Code`, 
          rucc = `2003 Rural-urban Continuum Code`, 
-         year = 2003) %>% 
+         year = "2003") %>% 
   select(fips, year, rucc)
 
 df3 <- read_xls("data_raw/foodaccess/rucc/ruralurbancodes2013.xls", 
                 sheet = "Rural-urban Continuum Code 2013") %>% 
   mutate(fips = `FIPS`, 
          rucc = `RUCC_2013`, 
-         year = 2013) %>% 
+         year = "2013") %>% 
   select(fips, year, rucc)
 
 df4 <- read_xlsx("data_raw/foodaccess/rucc/Ruralurbancontinuumcodes2023.xlsx", 
                  sheet = "Rural-urban Continuum Code 2023") %>% 
   mutate(fips = `FIPS`, 
          rucc = `RUCC_2023`, 
-         year = 2013) %>% 
+         year = "2023") %>% 
   select(fips, year, rucc)
 
 df <- bind_rows(df1, df2, df3, df4)
 rm(df1, df2, df3, df4)
 
-# Define metro (RUCC 7-9), metro-adjacent (RUCC 4-6), nonmetro (RUCC 1-3) 
-df <- df %>%
-  mutate(county_type = case_when(
-    rucc %in% c(7,8,9) ~ "metro", 
-    rucc %in% c(4,5,6) ~ "metro-adjacent", 
-    rucc %in% c(1,2,3) ~ "rural")) %>% 
-  select(fips, county_type)
+# Add county and state names
+df <- df %>% 
+  left_join(county)
+
+# Pivot longer
+df <- df %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name, year), 
+    names_to = "variable_name", 
+    values_to = "value")
+
+# Add columns 
+df <- df %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Population Characteristic", 
+    value_codes = NA) %>% 
+  select(fips, county_name, state_name, category, topic_area, 
+         year, variable_name, value, value_codes)
 
 # Create meta data 
-meta_rucc <- tibble(
+meta <- tibble(
   category = "Food Access", 
   topic_area = "Population Characteristic",
   variable_name = "rucc", 
@@ -2561,6 +2608,7 @@ meta_rucc <- tibble(
 
 # Define dataframe and metadata 
 df_rucc <- df 
+meta_rucc <- meta
 
 ```
 
@@ -2588,11 +2636,26 @@ df <- left_join(county, df)
 df <- df %>% 
   mutate(persistent_poverty = replace_na(persistent_poverty, 0))
 
-# define data 
-df_pp <- df
+# Pivot longer 
+df <- df %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
+
+# Add columns 
+df <- df %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Population Characteristic", 
+    year = "2020", 
+    value_codes = NA) %>% 
+  select(fips, county_name, state_name, category, topic_area, 
+         year, variable_name, value, value_codes)
+
 
 # Create meta data 
-meta_pp <- tibble(
+meta <- tibble(
   category = "Food access", 
   topic_area = "Population Characteristic",
   variable_name = "persistent_poverty", 
@@ -2622,19 +2685,261 @@ meta_pp <- tibble(
          chart_type1, chart_type2, 
          chart_axis_x1, chart_axis_x2, chart_axis_y1, 
          chart_axis_y2, source, url, citation, last_update_date)
+
+# define data 
+df_pp <- df
+meta_pp <- meta
+```
+
+## Food hardship
+
+We collect data from, data is available for download from [Healthy Communities NC Community Data Platform](https://healthycommunitiesnc.org/community-data/#food_hardship) on food hardship.
+
+The food hardship is a measure developed by [Cape Fear Collective](https://healthycommunitiesnc.org/profile/geo/cape-fear#physical-environment) from a logistic regression model predicting U.S. Department of Agriculture food desert status. The Food Hardship Index indicates how close a neighborhood is to being a designated food desert, with 1 indicating very high levels of food hardship and 0 indicating very low.
+
+The food hardship index cannot be aggregated, so it is only presented at the county-level.
+
+```{r}
+
+# Import data 
+df <- read_csv("data_raw/foodaccess/food_hardship.csv")
+
+# Keep data of interest and add county fips 
+df <- df %>% 
+  mutate(
+    fips = str_c(state_fips, county_fips, sep = ""), 
+    state_name = state) %>% 
+  select(fips, state_name, year, food_hardship)
+
+# Drop data missing data 
+df <- df %>% 
+  filter(!is.na(food_hardship))
+
+# Join with state and county data from tidycensus 
+df <- df %>% 
+  left_join(county)
+
+# Pivot longer
+df <- df %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name, year), 
+    names_to = "variable_name", 
+    values_to = "value")
+
+# Add columns and make year a character
+df <- df %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Population Characteristic", 
+    value_codes = NA, 
+    year = as.character(year)) %>% 
+  select(fips, county_name, state_name, category, topic_area, 
+         year, variable_name, value, value_codes)
+
+# Get list of years for meta data with a "|" between and add to metadata
+years <- df %>% 
+  distinct(year) %>% 
+  pull(year) %>% 
+  paste(collapse = "|") %>%
+  as_tibble() %>%
+  rename(years = value)
+
+# Create meta data with only distinct entries and add years 
+meta <- df %>% 
+  select(-year) %>% 
+  distinct(category, topic_area, variable_name) %>% 
+  bind_cols(years)
+
+# Add columns 
+meta <- meta %>% 
+  mutate(
+    `2 pager title` = "Nutrition Security and Food Access",
+    user_friendly_variable_name = "Food hardship index", 
+  variable_definition = "Indicates how close a neighborhood is to being a designated food desert, with 1 indicating very high levels of food hardship and 0 indicating very low", 
+  periodicity = "various",
+  aggregation = "count",  
+  format = "integer", 
+  keywords = "Cape Fear|Healthy Communities NC", 
+  hashtags = "#poverty|#foodinsecurity|#fooddesert|#hunger" , 
+  chart_type1 = "BarChart", 
+  chart_type2 = NA, 
+  chart_axis_x1 = user_friendly_variable_name, 
+  chart_axis_x2 = NA, 
+  chart_axis_y1 = NA, 
+  chart_axis_y2 = NA,
+  source = "Healthy Communities NC Community Data Platform", 
+  url = "https://healthycommunitiesnc.org/community-data/#food_hardship", 
+  citation = "Cape Fear Collective, Food Hardship Score",
+  last_update_date = "1/31/2024") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+
+# define data frame
+df_food_hardship <- df
+meta_food_hardship <- meta
+```
+
+## Food Banks
+
+Data on food bankes is from the [U.S. Environmental Protection Agency (EPA), Excess Food Opportunities Map](https://www.epa.gov/sustainable-management-food/excess-food-opportunities-map). Data is downloaded from the [Excess Food Opportunities Map Data Download](https://epa.maps.arcgis.com/home/item.html?id=72f42ebe8ff54da79093c23a586be718)
+
+```{r}
+
+# Import data 
+df <- read_xlsx("data_raw/foodaccess/FoodBanks.xlsx", 
+                sheet = "Data") %>% 
+  clean_names()
+
+# Define variables 
+df <- df %>% 
+  mutate(
+    org_name = str_to_title(name),
+    address = str_to_title(str_c(address, city, sep = ", ")), 
+    org_address = str_c(address, state, sep = ", "),
+    org_address = str_c(org_address, zip_code, sep = " "), 
+    lat = point_y, 
+    long = point_x, 
+    org_type = "Food bank", 
+    variable_name = "location_food_banks") %>% 
+  select(variable_name, lat, long, org_name, 
+         org_type, org_address)
+
+## Get FIPS codes from lat/long data using the spatial county data from the Tigris package, defined above as county_sf
+
+# make data frame into a spatial data frame and keep original lat/long variables
+df_sf <- df %>% 
+  st_as_sf(coords = c("long", "lat"),
+           crs = st_crs(county_sf), 
+           remove = FALSE)
+
+# intersect our spatial point-level data with the tigris county spatial data frame 
+intersected <- st_intersects(df_sf, county_sf)
+
+# get the fips code for each entry
+df_sf <- df_sf %>%
+  mutate(
+    intersection = as.integer(intersected), 
+    fips = county_sf$geoid[intersection]) 
+
+rm(intersected)
+
+# Turn back into a regular data frame
+df <- as_tibble(df_sf) %>% 
+  select(-geometry, -intersection)
+
+# Add state and county names 
+df <- df %>% 
+  left_join(county)
+
+# Add variables and put in correct order 
+df <- df %>% 
+  mutate(
+    category = "Food Access", 
+    topic_area = "Food Store", 
+    value = 1, 
+    value_codes = NA, 
+    year = "2023")
+
+df_foodbank_point <- df %>% 
+  select(fips, county_name, state_name, 
+         category, topic_area, year, variable_name, 
+         value, value_codes, lat, long, org_name, 
+         org_type, org_address)
+
+## Number of operations per county
+df_county <- df %>% 
+  group_by(fips, variable_name, state_name, county_name) %>% 
+  summarise(value = sum(value)) 
+
+# Number of operations per state, add state fips code
+df_state <- df_county %>% 
+  group_by(variable_name, state_name) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(state)
+  
+# Number of operations in US
+df_us <- df_county %>% 
+  group_by(variable_name) %>% 
+  summarise(value = sum(value)) %>%
+  mutate(
+    fips = "00", 
+    state_name = "US", 
+    county_name = NA)
+
+# Join all data into one data frame 
+df_agg <- bind_rows(df_county, df_state, df_us)
+
+rm(df_county, df_state, df_us)
+
+# Add in additional columns for aggregated data and keep columns of interest
+df_agg <- df_agg %>% 
+  mutate(
+    variable_name = "number_food_banks", 
+    category = "Institutions",
+    topic_area = "Institutions", 
+    year = "2023",
+    value_codes = NA) %>%  
+  select(fips, county_name, state_name, category, 
+         topic_area, year, variable_name, value, 
+         value_codes)
+
+# Define data frame
+df_foodbanks <- df_agg
+rm(df_agg)
+
+# Define meta data 
+meta_foodbanks <- tibble(
+  variable_name = c("number_food_banks", 
+  "location_food_banks"), 
+  category = "Food Access", 
+  topic_area = "Food Store", 
+  `2 pager title` = "Nutrition Security and Food Access",
+  user_friendly_variable_name = c("Food banks, number", 
+                                  "Food banks, location"), 
+    variable_definition = c("Number of food banks",
+                            "Location of food banks"), 
+    years = "2023", 
+    periodicity = "unknown",
+    aggregation	= "count", 
+    format = "integer", 
+    keywords = "Excess food|Food insecurity", 
+    hashtags = "#foodbank", 
+    chart_type1 = "BarChart", 
+    chart_type2	= NA, 
+    chart_axis_x1	= variable_definition, 
+    chart_axis_x2	= NA, 
+    chart_axis_y1	= NA, 
+    chart_axis_y2	= NA, 
+    source = "U.S. Environmental Protection Agency (EPA)", 
+    url = "https://epa.maps.arcgis.com/home/item.html?id=72f42ebe8ff54da79093c23a586be718", 
+    citation	= "U.S. Environmental Protection Agency (EPA), Excess Food Opportunities Map", 
+    last_update_date = "1/30/24") %>% 
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags,
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
+
 ```
 
 ## Combine all data and write to file
 
 ```{r}
-rm(meta, df)
+rm(meta, df, df_list, df_sf)
 
 # Get metadata file for all data
 meta_foodaccess <- mget(ls(pattern = "^meta")) %>% 
   keep(~is.data.frame(.x)) %>% 
   bind_rows() %>% 
   mutate(
-    `2 pager title` = "Nutrition Security and Food Access", 
+    `2 pager title` = "Nutrition Security & Food Access", 
     last_update_date = "1/30/24") %>%
   select(`2 pager title`, category, topic_area, variable_name,
          user_friendly_variable_name, variable_definition, 
@@ -2644,16 +2949,32 @@ meta_foodaccess <- mget(ls(pattern = "^meta")) %>%
          chart_axis_x1, chart_axis_x2, chart_axis_y1, 
          chart_axis_y2, source, url, citation, last_update_date)
 
+# Point data 
+foodaccess_point <- df_foodbank_point %>% 
+  mutate(year = as.character(year))
+
+rm(df_foodbank_point)
+
 # Get df for all 
 df_foodaccess <- mget(ls(pattern = "^df")) %>% 
   keep(~is.data.frame(.x)) %>%
   bind_rows()
 
-# Drop rows with no data
-df_foodaccess <- df_foodaccess %>%
-  filter(!(is.na(value) & is.na(value_codes)))
+# Make sure all columns are in the right order and all US data has state name
+df_foodaccess <- df_foodaccess %>% 
+  mutate(
+    year = as.character(year), 
+    state_name = case_when(
+      fips == "00" ~ "US", 
+      TRUE ~ state_name)) %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
 
 # write to file 
 write_csv(meta_foodaccess, "data_final/meta_foodaccess.csv")
 write_csv(df_foodaccess, "data_final/df_foodaccess.csv")
+write_csv(foodaccess_point, "data_final/df_foodaccess_point.csv")
+
+rm(list=ls())
 ```

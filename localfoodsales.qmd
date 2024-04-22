@@ -1,12 +1,11 @@
 ---
+title: Local Food Sales
 author: "Allison Bauman"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
 ```
-
-# Local Food Sales
 
 The Local and Regional Food Systems Data Warehouse contains data indicators related to [local food sales](https://localfoodeconomics.com/wp-content/uploads/2022/11/Local-Food-Sales-Brief_final.pdf). The Data Warehouse contains data related to local food sales that can help researchers, practitioners, and policymakers working to support farm and local food system development. The data can be used to inform proposals for funding,communicate the importance and broader context of their work to shareholders and policy makers, and to evaluate programs.
 
@@ -30,6 +29,8 @@ Site users are encouraged to acknowledge the systemic factors that influence com
 We use [tidycensus](https://walker-data.com/tidycensus/) to get state and county names by FIPS so they are uniform across all data sets. And [tigris](https://cran.r-project.org/web/packages/tigris/index.html) to get spatial county-level data frames.
 
 In the tidycensus data, there is no data for FIPS 02010 Aleutian Islands Census Area, Alaska. This FIPS is found in the Census of Agriculture. We add this fips to our county data based on the [Geographic Area Codes and Titles from the U.S. Bureau of Labor Statistics](https://www.bls.gov/cew/classifications/areas/qcew-area-titles.htm).
+
+Alaska must be mapped differently than by counties. For Alaska, the “proper” way to go is to join this crosswalk with Alaska counties. Form a union of the counties to get a shapefile with the NASS regions. Then merge the ag census data with that. You will report the total for the NASS designated region instead of the county. To build the map, you’d want to remove Alaska from a county shape file, and splice in Alaska with NASS region.
 
 ```{r}
 library(tidyverse, quietly = TRUE)
@@ -181,36 +182,42 @@ rm(df_county, df_state, df_us)
 # Add in additional columns for aggregated data and keep columns of interest
 df_agg <- df_agg %>% 
   mutate(
+    variable_name = str_c("number_", variable_name, sep = ""), 
     category = "Food Retail",
     topic_area = case_when(
-      variable_name == "csa" ~ "Community Supported Agriculture", 
-      variable_name == "farmersmarket" ~ "Farmers Market", 
-      variable_name == "agritourism" ~ "Agritourism",
-      variable_name == "onfarmmarket" ~ "On Farm Market"), 
+      variable_name == "number_csa" ~ "Community Supported Agriculture", 
+      variable_name == "number_farmersmarket" ~ "Farmers Market", 
+      variable_name == "number_agritourism" ~ "Agritourism",
+      variable_name == "number_onfarmmarket" ~ "On Farm Market"), 
     year = "2023",
     value_codes = NA) %>%  
   select(fips, county_name, state_name, category, 
          topic_area, year, variable_name, value, 
          value_codes)
 
+# Drop agritourism, we will use census of ag for ag tourism counts
+df_agg <- df_agg %>% 
+  filter(variable_name != "number_agritourism")
+
 # Define food retail data frame 
-food_retail <- df_agg
+df_food_retail <- df_agg
 rm(df_agg)
 
 # Add in additional columns for point-level data and keep columns of interest
-df <- nested_df %>% 
+df <- df %>% 
+  left_join(county) %>%
   mutate(
     category = "Food Retail",
     topic_area = case_when(
-      variable_name == "csa" ~ "Community Supported Agriculture", 
-      variable_name == "farmersmarket" ~ "Farmers Market", 
-      variable_name == "agritourism" ~ "Agritourism",
-      variable_name == "onfarmmarket" ~ "On Farm Market"),
+      str_detect(variable_name, "csa") ~ "Community Supported Agriculture", 
+      str_detect(variable_name, "farmersmarket") ~ "Farmers Market", 
+      str_detect(variable_name, "agritourism") ~ "Agritourism",
+      str_detect(variable_name, "onfarmmarket") ~ "On Farm Market"),
     variable_name = case_when(
-      variable_name == "csa" ~ "csa_point", 
-      variable_name == "farmersmarket" ~ "farmersmarket_point", 
-      variable_name == "agritourism" ~ "agritourism_point",
-      variable_name == "onfarmmarket" ~ "onfarmmarket_point"), 
+      str_detect(variable_name, "csa") ~ "location_csa", 
+      str_detect(variable_name, "farmersmarket") ~ "location_farmersmarket", 
+      str_detect(variable_name, "agritourism") ~ "location_agritourism",
+      str_detect(variable_name, "onfarmmarket") ~ "location_onfarmmarket"), 
     org_type = topic_area, 
     year = "2023", 
     value_codes = NA) %>%
@@ -226,69 +233,70 @@ df <- nested_df %>%
 rm(nested_df)
 
 # Drop obs. with no data and define food retail point-level data frame 
-food_retail_point <- df %>% 
+df_food_retail_point <- df %>% 
   filter(!is.na(lat))
 
+
 # Create meta data 
-meta_point <- food_retail_point %>% 
+meta_point <- df_food_retail_point %>% 
   group_by(category, topic_area, variable_name) %>%
   count() %>% 
   select(-n)
 
-meta_food_retail <- food_retail %>% 
-  group_by(category, topic_area, variable_name) %>% 
+meta_food_retail <- df_food_retail %>% 
+  group_by(category, topic_area, variable_name) %>%
   count() %>% select(-n) %>% 
   bind_rows(meta_point) %>%
   mutate(
     `2 pager title` = "Local Food Sales", 
     years = "2023",
     user_friendly_variable_name = case_when(
-      variable_name == "csa" ~ "Community Supported Agriculture (CSA), number of businesses", 
-      variable_name == "farmersmarket" ~ "Farmers markets, number of businesses", 
-      variable_name == "agritourism" ~ "Agritourism, number of businesses", 
-      variable_name == "onfarmmarket" ~ "On farm market, number of businesses", 
-      variable_name == "csa_point" ~ "Community Supported Agriculture (CSA), location", 
-      variable_name == "farmersmarket_point" ~ "Farmers markets, location", 
-      variable_name == "agritourism_point" ~ "Agritourism, location", 
-      variable_name == "onfarmmarket_point" ~ "On farm market, location"),
+      variable_name == "number_csa" ~ "Community Supported Agriculture (CSA), number of businesses", 
+      variable_name == "number_farmersmarket" ~ "Farmers markets, number of businesses", 
+      variable_name == "number_agritourism" ~ "Agritourism, number of businesses", 
+      variable_name == "number_onfarmmarket" ~ "On farm market, number of businesses", 
+      variable_name == "location_csa" ~ "Community Supported Agriculture (CSA), location", 
+      variable_name == "location_farmersmarket" ~ "Farmers markets, location", 
+      variable_name == "location_agritourism" ~ "Agritourism, location", 
+      variable_name == "location_onfarmmarket" ~ "On farm market, location"),
     variable_definition = case_when(
-      variable_name == "csa" ~ "Number of community Supported Agriculture (CSA) businesses", 
-      variable_name == "farmersmarket" ~ "Number of farmers markets",
-      variable_name == "agritourism" ~ "Number of agritourism businesses", 
-      variable_name == "onfarmmarket" ~ "Number of on-farm market businesses", 
-      variable_name == "csa_point" ~ "Location of community Supported Agriculture (CSA) businesses", 
-      variable_name == "farmersmarket_point" ~ "Location of farmers markets", 
-      variable_name == "agritourism_point" ~ "Location of agritourism businesses", 
-      variable_name == "onfarmmarket_point" ~ "Location of on-farm market businesses"), 
+      variable_name == "number_csa" ~ "Number of community Supported Agriculture (CSA) businesses. Data is self reported and not representative of all CSA businesses.", 
+      variable_name == "number_farmersmarket" ~ "Number of farmers markets. Data is self reported and not representative of all farmers markets.",
+      variable_name == "number_agritourism" ~ "Number of agritourism businesses", 
+      variable_name == "number_onfarmmarket" ~ "Number of on-farm market businesses. Data is self reported and not representative of all onfarm markets.", 
+      variable_name == "location_csa" ~ "Location of community Supported Agriculture (CSA) businesses. Data is self reported and not representative of all CSA businesses.",
+      variable_name == "location_farmersmarket" ~ "Location of farmers markets. Data is self reported and not representative of all farmers markets.", 
+      variable_name == "location_agritourism" ~ "Location of agritourism businesses. Data is self reported and not representative of all agritourism businesses.", 
+      variable_name == "location_onfarmmarket" ~ "Location of on-farm market businesses. Data is self reported and not representative of all onfarm markets."), 
     periodicity = "continuously updated",
     aggregation = case_when(
-      str_detect(variable_name, "point") ~ "point", 
+      str_detect(variable_name, "location") ~ "point", 
       TRUE ~ "count"), 
     format = case_when(
-      str_detect(variable_name, "point") ~ "point", 
+      str_detect(variable_name, "location") ~ "point", 
       TRUE ~ "integer"),
     keywords = "USDA|farmstand|USDA AMS|local food directory", 
     hashtags = "#farmersmarket|#shoplocal|#eatlocal|#supportlocal" , 
-    map_quintiles = "rounding_rule",
     chart_type1 = case_when(
       format == "point" ~ NA, 
       TRUE ~ "BarChart"), 
     chart_type2 = NA, 
     chart_axis_x1 = case_when(
-      str_detect(variable_name, "point") ~ NA, 
-      variable_name %in% c("csa", "agritourism", "onfarmmarket") ~ "Number of businesses", 
-      variable_name == "farmersmarket" ~ "Number of markets"), 
+      str_detect(variable_name, "location") ~ NA, 
+      variable_name %in% c("number_csa", "number_agritourism", 
+                           "number_onfarmmarket") ~ "Number of businesses", 
+      variable_name == "number_farmersmarket" ~ "Number of markets"), 
     chart_axis_x2 = NA, 
     chart_axis_y1 = NA, 
     chart_axis_y2 = NA,
     source = "U.S. Department of Agriculture, Local Food Directories", 
     citation = "U.S. Department of Agriculture, Local Food Directories",
     url = "https://www.usdalocalfoodportal.com/#directories", 
-    last_update_date = "12/30/2023") %>%
+    last_update_date = "1/31/2024") %>%
   select(`2 pager title`, category, topic_area, variable_name,
          user_friendly_variable_name, variable_definition, 
          years, periodicity, aggregation, format, 
-         keywords, hashtags, map_quintiles,
+         keywords, hashtags, 
          chart_type1, chart_type2, 
          chart_axis_x1, chart_axis_x2, chart_axis_y1, 
          chart_axis_y2, source, url, citation, last_update_date)
@@ -296,176 +304,302 @@ meta_food_retail <- food_retail %>%
 rm(df, meta_point)
 ```
 
-## Direct-to-consumer and intermediated operations - Restricted access data
+## Direct-to-consumer, intermediated, value-added, and agritourism operations and sales
 
-We import data compiled by the author from the restricted access [2017 Census of Agriculture](https://www.nass.usda.gov/Publications/AgCensus/2017/index.php) on the number of farms participating in local food marketing channels by county. These data differ from publicly available data as markets are separated by farms selling through direct-to-consumer channels only, intermediated channels only, those selling through both local food channels, and those selling through nonlocal channels only. There are no observations in these data for which results are not disclosed.
+We use the [2022](https://www.nass.usda.gov/Publications/AgCensus/2022/index.php) and [2017](https://www.nass.usda.gov/Publications/AgCensus/2017/index.php) Census of Agriculture public data. Data is downloaded from U.S. Department of Agriculture, National Agricultural Statistics Service (USDA NASS), Data, Large Datasets, [qs.census2022.txt.gz and qs.census2017.txt.gz](https://www.nass.usda.gov/datasets/).
 
-While we would like to also present county-level demographic data for local food producers, all data presented a disclosure risk so we are not able to provide that information.
+Data is provided for
+
+-   Direct-to-consumer sales and farms
+
+-   Intermediated sales and farms
+
+-   Local sales
+
+    -   Because direct-to-consumer and intermediated farm counts are not exclusive categories and one farm could be counted in both categories, we cannot compute total local farms with the public access data.
+
+    -   If either sales category was not reported, we report local food sales as NA and include the appropriate disclosure code. There were two cases fips 31173 in 2017 and fips 20119 in 2020, where direct-to-consumer and intermediated had different disclosure codes. We use (D) for both.
+
+-   Agritourism sales and farms
+
+-   Value-added sales and farms (this includes sales though commodity and local channels)
+
+Data notes:
+
+-   \(D\) Withheld to avoid disclosing data for individual farms
+-   \(Z\) Less than half of the unit shown
 
 ```{r}
 
-# Import restricted access data 
-df <- read_csv("data_raw/localfoodsales/COA/restricted_access.csv") %>%
-  mutate(fips = str_pad(fips, 
-                        side = "left", 
-                        pad = "0", width = 5))
+# Import 2017, 2022 data
+file_list <- fs::dir_ls(path = "data_raw/localfoodsales/qs.census")
 
-# Calculate number of operations in each market channel as a percent of total operations
-df <- df %>% mutate(across(d2c_only:nonlocal, 
-                             .fns = ~./n, 
-                             .names = "{col}_p"))
+df <- file_list %>% 
+  map(~read_tsv(.,show_col_types = FALSE)) %>% 
+  bind_rows() %>% 
+  clean_names()
 
-# make data long and add year variable and county and state name
-df_county <- df %>% 
-  rename(all_farms = n) %>% 
-  pivot_longer(
-  cols = !fips, 
-  names_to = "variable_name", 
-  values_to = "value") %>% mutate(
-    year = "2017") %>% 
-  left_join(county_state)
+# Select variables of interest, keep totals only
+df <- df %>% 
+  filter(domain_desc == "TOTAL" & 
+           str_detect(short_desc, "WHOLESALE|RETAIL|VALUE-ADDED PRODUCTS|COMMODITY TOTALS - SALES|COMMODITY TOTALS - OPERATIONS WITH SALES|AG TOURISM & RECREATIONAL SERVICES") & 
+           agg_level_desc %in% c("COUNTY", "NATIONAL", "STATE")) %>% 
+  filter(short_desc != "COMMODITY TOTALS - SALES, MEASURED IN $ / OPERATION") %>%
+  select(short_desc, agg_level_desc, state_fips_code, county_code, year, value)
 
-# Aggregate to the state level and re-calculate percentages at state-level
-df_state <- df %>% 
-  left_join(county_state) %>%
-  group_by(state_name) %>% 
-  summarise(across(n:nonlocal, ~ sum(.))) %>% 
-  mutate(across(d2c_only:nonlocal, 
-                             .fns = ~./n, 
-                             .names = "{col}_p"))
-
-# Get state fips and pivot longer
-df_state <- df_state %>% 
-  left_join(state) %>% 
-  rename(
-    all_farms = n) %>%
-  pivot_longer(
-    cols = !c(fips, state_name), 
-    names_to = "variable_name", 
-    values_to = "value") %>% 
+# To be consistent with other data sets, change the US fips code of 99 to 00
+# Add fips 
+df <- df %>% 
   mutate(
-    year = "2017", 
-    county_name = NA) 
+    state_fips_code = case_when(
+      state_fips_code == "99" ~ "00", 
+      TRUE ~ state_fips_code), 
+    fips = case_when(
+      is.na(county_code) ~ state_fips_code, 
+      TRUE ~ str_c(state_fips_code, county_code)))
 
-# Aggregate to the national level 
-df_US <- df %>%  
-  summarise(across(n:nonlocal, ~ sum(.))) %>%
-  mutate(across(d2c_only:nonlocal, 
-                             .fns = ~./n, 
-                             .names = "{col}_p"))
-
-# Pivot longer and add variables
-df_US <- df_US %>% 
-  rename(
-    all_farms = n) %>% 
+# Create variable names and make values numeric
+df <- df %>% 
   mutate(
-    year = "2017", 
-    fips = "00") %>% 
+    short_desc = str_remove_all(short_desc, 
+                                "COMMODITY TOTALS - |INCOME, FARM-RELATED, |COMMODITY TOTALS, "), 
+    variable_name = case_when(
+      short_desc == "SALES, MEASURED IN $" ~ "all_sales", 
+      short_desc == "OPERATIONS WITH SALES" ~ "all_farms", 
+      str_detect(short_desc, "AG TOURISM & RECREATIONAL SERVICES - OPERATIONS WITH RECEIPTS") ~ 
+        "agritourism_farms", 
+      short_desc == "AG TOURISM & RECREATIONAL SERVICES - RECEIPTS, MEASURED IN $" ~ 
+        "agritourism_sales",
+      short_desc == "INCL VALUE-ADDED, RETAIL, DIRECTLY MARKETED, HUMAN CONSUMPTION - OPERATIONS WITH SALES" ~ "d2c_farms",
+      short_desc == "INCL VALUE-ADDED, RETAIL, DIRECTLY MARKETED, HUMAN CONSUMPTION - SALES, MEASURED IN $" ~ "d2c_sales",
+      short_desc == "INCL VALUE-ADDED, WHOLESALE, DIRECT TO RETAILERS & INSTITUTIONS & FOOD HUBS, LOCAL OR REGIONALLY BRANDED PRODUCTS, HUMAN CONSUMPTION - OPERATIONS WITH SALES" ~  "intermediated_farms", 
+      short_desc == "INCL VALUE-ADDED, WHOLESALE, DIRECT TO RETAILERS & INSTITUTIONS & FOOD HUBS, LOCAL OR REGIONALLY BRANDED PRODUCTS, HUMAN CONSUMPTION - SALES, MEASURED IN $" ~ "intermediated_sales",
+      short_desc == "PRODUCED AND SOLD VALUE-ADDED PRODUCTS - OPERATIONS WITH SALES" ~ "valueadded_farms",
+      short_desc == "PRODUCED AND SOLD VALUE-ADDED PRODUCTS - SALES, MEASURED IN $" ~ "valueadded_sales", 
+      TRUE ~ NA), 
+    value_codes = case_when(
+      value =="(D)" ~ "D", 
+      value == "(Z)" ~ "Z", 
+      TRUE ~ NA),
+    value = case_when(
+      value %in% c("(D)", "(Z)") ~ NA, 
+      TRUE ~ as.numeric(str_remove_all(value, ",")))) %>%
+  select(fips, year, variable_name, value, value_codes)
+
+## Drop average farm sales 
+df <- df %>% 
+  filter(!is.na(variable_name))
+
+## Add value codes for total local food sales variables. For any variable that is not disclosed for either local food sales category we do not calculate total local food sales
+value_codes <- df %>%
+  filter(variable_name %in% c("d2c_sales", "intermediated_sales")) %>% 
+  select(year, fips, variable_name, value_codes) %>%
+  pivot_wider(
+    names_from = variable_name, 
+    values_from = value_codes) %>% 
+  mutate(
+    local_sales = case_when(
+      d2c_sales != intermediated_sales | 
+        (d2c_sales =="D" | intermediated_sales == "D" ) ~ "D",
+     (d2c_sales =="Z" | intermediated_sales == "Z") ~ "Z"  ,
+      TRUE ~ NA)) %>% 
+  select(year, fips, local_sales) %>% 
   pivot_longer(
     cols = !c(year, fips), 
     names_to = "variable_name", 
-    values_to = "value") %>% 
+    values_to = "value_codes")
+
+## Calculate total local food sales
+local <- df %>% 
+  filter(variable_name %in% c("d2c_sales", "intermediated_sales")) %>% 
+  select(-value_codes) %>% 
+  pivot_wider(
+    names_from = variable_name, 
+    values_from = value) %>% 
   mutate(
-    state_name = "US", 
-    county_name = NA) 
+    local_sales = d2c_sales + intermediated_sales) %>% 
+  select(fips, year, local_sales) %>% 
+  pivot_longer(
+    cols = !c(fips, year), 
+    names_to = "variable_name", 
+    values_to = "value")
 
-# Bind rows to create COA restricted access data frame
-coa_ra <- bind_rows(df_county, df_state, df_US)
+# Join with value codes 
+local <- local %>% 
+  left_join(value_codes)
 
-rm(df, df_county, df_state, df_US)
+# Add to original data 
+df <- bind_rows(df, local)
 
-# Add columns 
-coa_ra <- coa_ra %>% mutate(
-  category = "Food Retail",
-  topic_area = "General DTC", 
-  value_code = NA) %>% select(
+## Calculate percentages of total for farms and sales 
+percent <- df %>% 
+  select(!value_codes) %>%
+  pivot_wider(
+    names_from = variable_name, 
+    values_from = value) %>%
+  select(fips, year, 
+         starts_with("all"), everything()) %>%
+  mutate(across(ends_with("_farms"), ~ ./all_farms, 
+                .names = "{.col}_pct")) %>% 
+  mutate(across(ends_with("_sales"), ~ ./all_sales, 
+                .names = "{.col}_pct")) %>%
+  pivot_longer(
+    cols = !c(fips, year), 
+    names_to = "variable_name", 
+    values_to = "value") %>% 
+  filter(str_detect(variable_name, "_pct$") & 
+        !variable_name %in% c("all_sales_pct", 
+                                 "all_farms_pct", 
+                                 "all_producers_pct"))
+    
+# Add value codes 
+percent <- percent %>% 
+  mutate(
+    variable_name = str_remove(variable_name, "_pct$"))
+
+value_codes <- df %>%
+      select(fips, variable_name, year, value_codes)
+
+percent <- left_join(percent, value_codes) %>% 
+  mutate(variable_name = str_c(variable_name, "_pct", sep = ""))
+
+df <- bind_rows(df, percent)
+rm(percent, value_codes, local)
+
+# Add state and county names
+df <- df %>% 
+  left_join(county_state) 
+  
+# Add additional variables 
+df <- df %>%
+  mutate(
+    category = "Food Retail",
+    topic_area = case_when(
+      str_detect(variable_name, "agritourism") ~ "Agritourism", 
+      str_detect(variable_name, "d2c|intermediated|valueadded|local") ~ "General DTC", 
+      TRUE ~ "Agriculture")) %>% 
+  select(
     fips, county_name, state_name, 
     category, topic_area, year, variable_name, value, 
-    value_code) 
+    value_codes) 
 
 # Create metadata file
-meta_coa_ra <- coa_ra %>% 
+meta_coa <- df %>% 
   group_by(variable_name, category, topic_area) %>% 
   count() %>% 
   select(-n) %>% 
   mutate(
     `2 pager title` = "Local Food Sales", 
     user_friendly_variable_name = case_when(
+      variable_name == "agritourism_farms" ~ "Agritourism, number of farms",
+      variable_name == "agritourism_farms_pct" ~ "Agritourism, number of farms as a percent of all farms", 
+      variable_name == "agritourism_sales" ~ "Agritourism, sales",
+      variable_name == "agritourism_sales_pct" ~ "Agritourism, sales as a percent of all farm sales",   
       variable_name == "all_farms" ~ "Farms, total number",
-      variable_name == "d2c_intermediated" ~ 
-        "Farms, number selling direct and intermediated", 
-      variable_name == "d2c_intermediated_p" ~ 
-        "Farms, percent of all farms selling direct and intermediated", 
-      variable_name == "d2c_only" ~ 
-        "Farms, number selling direct-to-consumer only",
-      variable_name == "d2c_only_p" ~ 
-        "Farms, percent of all farms selling direct-to-consumer only",
-      variable_name == "intermediated_only" ~ 
-        "Farms, number selling intermediated only", 
-      variable_name == "intermediated_only_p" ~ 
-        "Farms, percent of all farms selling intermediated only",
-      variable_name == "local" ~ 
-        "Farms, number selling through local marketing channels",
-      variable_name == "local_p" ~ 
-        "Farms, percent of all farms selling through local marketing channels", 
-      variable_name == "nonlocal" ~ 
-        "Farms, number selling through nonlocal market channels", 
-      variable_name == "nonlocal_p" ~ 
-        "Farms, percent of all farms selling through nonlocal market channels"), 
+      variable_name == "all_sales" ~ "Farms, total sales", 
+      variable_name == "d2c_farms" ~ 
+        "Farms, number selling direct-to-consumer",
+      variable_name == "d2c_farms_pct" ~ 
+        "Farms, percent of all farms selling direct-to-consumer",
+       variable_name == "d2c_sales" ~ 
+        "Farms, direct-to-consumer sales",
+      variable_name == "d2c_sales_pct" ~ 
+        "Farms, direct-to-consumer sales as a percent of all farm sales",
+      variable_name == "intermediated_farms" ~ 
+        "Farms, number selling intermediated", 
+      variable_name == "intermediated_farms_pct" ~ 
+        "Farms, percent of all farms selling intermediated",
+      variable_name == "intermediated_sales" ~ 
+        "Farms, intermediated sales", 
+      variable_name == "intermediated_sales_pct" ~ 
+        "Farms, intermediated sales as a percent of all farm sales",
+      variable_name == "local_sales" ~ 
+        "Farms, local marketing channel sales",
+      variable_name == "local_sales_pct" ~ 
+        "Farms, local marketing channel sales as a percent of all farm sales", 
+      variable_name == "valueadded_farms" ~ 
+        "Farms, number of farms with value-added sales", 
+      variable_name == "valueadded_farms_pct" ~ 
+        "Farms, percent of all farms with value-added sales", 
+      variable_name == "valueadded_sales" ~ 
+        "Farms, value-added sales",
+      variable_name == "valueadded_sales_pct" ~ 
+        "Farms, value-added sales as a percent of all farm sales"), 
     variable_definition = case_when(
+      variable_name == "agritourism_farms" ~ "Number of farms with income from agritourism and recreational services",
+      variable_name == "agritourism_farms_pct" ~ "Number of farms with income from agritourism and recreational services as a percent of all farms", 
+      variable_name == "agritourism_sales" ~ "Income from agritourism and recreational services",
+      variable_name == "agritourism_sales_pct" ~ "Income from agritourism and recreational services as a percent of all farm sales",   
       variable_name == "all_farms" ~ "Number of farms",
-      variable_name == "d2c_intermediated" ~ 
-        "Number of farms selling direct and intermediated", 
-      variable_name == "d2c_intermediated_p" ~ 
-        "Percent of all farms selling direct and intermediated", 
-      variable_name == "d2c_only" ~ 
-        "Number of farms selling direct-to-consumer only",
-      variable_name == "d2c_only_p" ~ 
-        "Percent of all farms selling direct-to-consumer only",
-      variable_name == "intermediated_only" ~ 
-        "Number of farms selling intermediated only", 
-      variable_name == "intermediated_only_p" ~ 
-        "Percent of all farms selling intermediated only",
-      variable_name == "local" ~ 
-        "Number of farms selling through local marketing channels",
-      variable_name == "local_p" ~ 
-        "Percent of all farms selling through local marketing channels", 
-      variable_name == "nonlocal" ~ 
-        "Number of farms selling through nonlocal market channels", 
-      variable_name == "nonlocal_p" ~ 
-        "Percent of all farms selling through nonlocal market channels"), 
-    years = "2017", 
+      variable_name == "all_sales" ~ "Total sales of all farms", 
+      variable_name == "d2c_farms" ~ 
+        "Number of farms selling through direct-to-consumer market channels (e.g., farmers markets, community supported agriculture, farm stands)",
+      variable_name == "d2c_farms_pct" ~ 
+        "Percent of all farms selling through direct-to-consumer market channels (e.g., farmers markets, community supported agriculture, farm stands)",
+       variable_name == "d2c_sales" ~ 
+        "Direct-to-consumer sales (e.g., farmers markets, community supported agriculture, farm stands)",
+      variable_name == "d2c_sales_pct" ~ 
+        "Direct-to-consumer sales (e.g., farmers markets, community supported agriculture, farm stands) as a percent of all farm sales",
+      variable_name == "intermediated_farms" ~ 
+        "Number of farms selling intermediated market channels (e.g., restaurants, grocery stores, schools, hospitals, regional food aggregators)", 
+      variable_name == "intermediated_farms_pct" ~ 
+        "Percent of all farms selling intermediated market channels (e.g., restaurants, grocery stores, schools, hospitals, regional food aggregators)",
+      variable_name == "intermediated_sales" ~ 
+        "Intermediated sales (e.g., restaurants, grocery stores, schools, hospitals, regional food aggregators)", 
+      variable_name == "intermediated_sales_pct" ~ 
+        "Intermediated sales (e.g., restaurants, grocery stores, schools, hospitals, regional food aggregators) as a percent of all farm sales",
+      variable_name == "local_sales" ~ 
+        "Sales through local marketing channels (e.g., farmers markets, community supported agriculture, farm stands, restaurants, grocery stores, schools, hospitals, regional food aggregators)",
+      variable_name == "local_sales_pct" ~ 
+        "Sales thorugh local marketing channel (e.g., farmers markets, community supported agriculture, farm stands, restaurants, grocery stores, schools, hospitals, regional food aggregators) as a percent of all farm sales", 
+      variable_name == "valueadded_farms" ~ 
+        "Number of farms with value-added sales (includes commodity and local sales)", 
+      variable_name == "valueadded_farms_pct" ~ 
+        "Percent of all farms with value-added sales (includes commodity and local sales)", 
+      variable_name == "valueadded_sales" ~ 
+        "Value-added sales (includes commodity and local sales)",
+      variable_name == "valueadded_sales_pct" ~ 
+        "Value-added sales (includes commodity and local sales) as a percent of all farm sales"), 
+    years = "2017|2022", 
     periodicity = "Every 5 years",
     aggregation	= case_when(
-      str_detect(variable_name, "_p") ~ "percent",
+      str_detect(variable_name, "_pct") ~ "percent",
       TRUE ~ "count"), 
     format = case_when(
-      str_detect(variable_name, "_p") ~ "percent",
+      str_detect(variable_name, "_pct") ~ "percent",
       TRUE ~ "integer"), 
     keywords = "USDA|NASS|COA|Census of Agriculture", 
     hashtags = "#eatlocal|#supportlocal|#locallygrown|#localfarmers|#localfarm", 
-    map_quintiles = "rounding_rule", 
     chart_type1 = "BarChart", 
     chart_type2	= NA, 
     chart_axis_x1	= case_when(
-      str_detect(variable_name, "_p") ~ "Percent of all farms",
-      TRUE ~ "Number of farms"), 
+      str_detect(variable_name, "number_pct$") ~ "Percent of all farms",
+      str_detect(variable_name, "sales_pct$") ~ "Percent of all sales",
+      str_detect(variable_name, "number") ~ "Number of all farms",
+      str_detect(variable_name, "sales") ~ "Sales"), 
     chart_axis_x2	= NA, 
     chart_axis_y1	= NA, 
     chart_axis_y2	= NA, 
-    source = "U.S. Departmetn of Agriculture, National Agricultural Statistical Survey, restricted access data", 
-    url = "https://www.nass.usda.gov/Publications/AgCensus/2017/index.php", 
-    citation	= "U.S. Departmetn of Agriculture, National Agricultural Statistical Survey, 2017, restricted access data, data compiled by author", 
-    last_update_date = "12/30/23") %>% 
+    source = "U.S. Department of Agriculture, National Agricultural Statistical Survey, Census of Agriculture", 
+    url = "https://www.nass.usda.gov/datasets/", 
+    citation	= "U.S. Department of Agriculture, National Agricultural Statistical Survey, Data, Large Datasets, qs.census2022.txt.gz",
+    last_update_date = "2/30/24") %>% 
   select(`2 pager title`, category, topic_area, variable_name,
          user_friendly_variable_name, variable_definition, 
          years, periodicity, aggregation, format, 
-         keywords, hashtags, map_quintiles,
+         keywords, hashtags, 
          chart_type1, chart_type2, 
          chart_axis_x1, chart_axis_x2, chart_axis_y1, 
          chart_axis_y2, source, url, citation, last_update_date)
 
-rm(meta, county, county_sf, county_state)
+
+# Define data frame and make year a character
+df_coa <- df %>% 
+  mutate(
+    year = as.character(year))
+
+rm(county, county_sf, county_state)
+
 ```
 
 ## Combine all data and put in final format
@@ -474,17 +608,34 @@ rm(meta, county, county_sf, county_state)
 rm(df, meta)
 
 # Combine all data  
-localfoodsales <- 
-  bind_rows(food_retail, coa_ra)
+df_localfoodsales <- 
+  bind_rows(df_food_retail, df_coa)
 
 # Combine metadata
 meta_localfoodsales <- 
-  bind_rows(meta_food_retail, meta_coa_ra)
+  bind_rows(meta_food_retail, meta_coa) %>% 
+  select(
+    `2 pager title`, category, topic_area, variable_name,
+    user_friendly_variable_name, variable_definition, 
+    years, periodicity, aggregation, format, 
+    keywords, hashtags, 
+    chart_type1, chart_type2, 
+    chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+    chart_axis_y2, source, url, citation, last_update_date)
+
+# Put point data in correct order 
+df_localfoodsales_point <- df_food_retail_point %>% 
+  mutate(
+    value = 1, 
+    year = as.character(year)) %>%
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes, 
+    lat, long, org_name, 
+    org_type, org_address)
 
 # Write files 
-write_csv(localfoodsales, "data_final/localfoodsales.csv")
-write_csv(food_retail_point, "data_final/localfoodsales_point.csv")
+write_csv(df_localfoodsales, "data_final/df_localfoodsales.csv")
+write_csv(df_localfoodsales_point, "data_final/df_localfoodsales_point.csv")
 write_csv(meta_localfoodsales, "data_final/meta_localfoodsales.csv")
-
-rm(list=ls())
 ```

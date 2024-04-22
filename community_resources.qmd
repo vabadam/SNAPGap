@@ -18,9 +18,43 @@ Not all communities have the same opportunities. One major limitation of our dat
 
 Site users are encouraged to acknowledge the systemic factors that influence community resources. When presenting data, we encourage disaggregation by individual race, ethnicity, and cultural group wherever possible. Aggregation of data can mask important differences that might be relevant for understanding needs and crafting adequate program and policy solutions. We also encourage the use of practices that invite community members to help contextualize data, share their personal stories, and amplify community solutions.
 
+## State and county data
+
 We use [tidycensus](https://walker-data.com/tidycensus/) to get state and county names by FIPS so they are uniform across all data sets.
 
-## Indicators of Community Wealth
+In the tidycensus data, there is no data for FIPS 02010 Aleutian Islands Census Area, Alaska. This FIPS is found in the Census of Agriculture. We add this fips to our county data based on the [Geographic Area Codes and Titles from the U.S. Bureau of Labor Statistics](https://www.bls.gov/cew/classifications/areas/qcew-area-titles.htm).
+
+```{r}
+library(tidyverse, quietly = TRUE)
+library(janitor, quietly = TRUE)
+
+# Get county and state fips, state name, county name 
+county <- tidycensus::fips_codes %>% 
+  unite("fips", 
+        c(state_code, county_code), 
+        sep = "", remove = FALSE) %>% 
+  rename(county_name = county) %>% 
+  select(fips, county_name, state_name)
+
+# Add 02010 Aleutian Islands Census Area, Alaska
+county <- county %>% 
+  add_row(fips = "02010", 
+          county_name = "Aleutian Islands Census Area", 
+          state_name = "Alaska", 
+          .after = 67)
+
+# Get state data and add "00" US
+state <- tidycensus::fips_codes %>% 
+  select(state_code, state_name) %>% 
+  rename(fips = state_code) %>% 
+  distinct() %>% 
+  add_row(fips = "00", state_name = "US")
+
+# Merge so we have county and state data in one data frame
+county_state <- bind_rows(county, state)
+```
+
+## Indicators of Community Wealth - full data set
 
 We first import the data set and modify the data in as described in [Schmit, Jablonski, Bonanno, and Johnson. 2021. "Measuring stocks of community wealth and thier association with food system efforts in rural and urban places." Food Policy 102(102119)](https://www.sciencedirect.com/science/article/pii/S0306919221000981). Data and code from the publication are available in [Git Hub](https://github.com/schmi-ny/County-Level-Community-Capital-Stocks/blob/main/CapitalPCs061521.xlsx). We keep the variables of interest, add a year variable and organize data by capital type into separate csv files. We use the CapitalPCs file from the GitHub site for the Schmitt et al. (2021) paper that developed these indicators to obtain the principal components.
 
@@ -56,7 +90,7 @@ state_fips <- tidycensus::fips_codes %>% select(state_name, state_code) %>%
 rm(aeppPCs)
 ```
 
-### Built capital
+## Built capital
 
 Built capital includes: foodbev_est_CBP, est_CBP, broad, broad_11, highway_km, pc1b_manufacturing, and pc2b_infrastructure.
 
@@ -65,148 +99,171 @@ broad, broad_11, and highway_km are not able to be presented for state/national 
 ```{r built}
 
 # Select data of interest for county level
-built_county <- capitals %>% select(
-  fips, foodbev_est_CBP_15, est_CBP_15, 
-  foodbev_est_CBP_10, est_CBP_10,
-  broad, broad_prct, broad_11, highway_km, highway_popwtdist,
-  pop_15_CBP, pop_10_CBP_new, 
-  pc1b_manufacturing, pc2b_infrastructure)
+built_county <- capitals %>% 
+  select(
+    fips, foodbev_est_CBP_15, est_CBP_15, 
+    foodbev_est_CBP_10, est_CBP_10,
+    broad, broad_prct, broad_11, highway_km, highway_popwtdist,
+    pop_15_CBP, pop_10_CBP_new, 
+    pc1b_manufacturing, pc2b_infrastructure) %>% 
+  left_join(county)
 
 # Summarise data at the state level
-built_state <- capitals %>% group_by(state) %>% select(
-  foodbev_est_CBP_15, est_CBP_15, foodbev_est_CBP_10, est_CBP_10,
-  pop_15_CBP, pop_10_CBP_new) %>% summarise_all(
-    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
-      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
-        state_code, foodbev_est_CBP_15:pop_10_CBP_new)  %>% rename(
-          fips = state_code)
+built_state <- built_county %>% 
+  group_by(state_name) %>% 
+  summarise(across(c(foodbev_est_CBP_15, est_CBP_15, 
+                     foodbev_est_CBP_10, est_CBP_10,
+                     pop_15_CBP, pop_10_CBP_new), 
+                   ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(state)
 
 # Summarise data at the US level
-built_us <- built_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
-  fips = "00")
+built_us <- built_state %>% 
+  summarise(across(!c(fips, state_name), 
+                   ~sum(.x))) %>% 
+  mutate(
+  fips = "00", 
+  state_name = "US")
 
  # Bind data so we have one data frame with US, state, and county level data
-built<- bind_rows(built_county, built_state, built_us)
+built <- bind_rows(built_county, built_state, built_us)
 rm(built_county, built_state, built_us)
 
-# Express all variables in per-capita or per-square mile (code taken from AEPP do file)
-built <- built %>% mutate(
-  foodbev_est_CBP_15=10000*foodbev_est_CBP_15/pop_15_CBP,
-  est_CBP_15=10000*est_CBP_15/pop_15_CBP, 
-  foodbev_est_CBP_10=10000*foodbev_est_CBP_10/pop_10_CBP_new,
-  est_CBP_10=10000*est_CBP_10/pop_10_CBP_new,
-  broad = broad_prct,
-  broad_11 = broad_11,
-  highway_km=1/(highway_popwtdist/1000)) %>% rename(
-    broad_16 = broad)
+# Express all variables in per-capita or per-square mile (code taken from AEPP do file). Rename broadband variables as different years have different definitions 
+built <- built %>% 
+  mutate(
+    foodbev_est_CBP_15=10000*foodbev_est_CBP_15/pop_15_CBP,
+    est_CBP_15=10000*est_CBP_15/pop_15_CBP, 
+    foodbev_est_CBP_10=10000*foodbev_est_CBP_10/pop_10_CBP_new,
+    est_CBP_10=10000*est_CBP_10/pop_10_CBP_new,
+    broad_advanced_telecomm_16 = broad_prct,
+    broad_terrestrial_11 = broad_11,
+    highway_km=1/(highway_popwtdist/1000)) 
+  
 
-# Add year variable
-built1 <- built %>% select(fips, foodbev_est_CBP_10, foodbev_est_CBP_15) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "foodbev_est_CBP_",
-  values_to = "foodbev_est_CBP") 
+# Pivot longer 
+built <- built %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
 
-built2 <- built %>% select(fips, est_CBP_10, est_CBP_15) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "est_CBP_", 
-  values_to = "est_CBP")
+# Drop variables not needed 
+built <- built %>% 
+  filter(!variable_name %in% c("pop_15_CBP", "pop_10_CBP_new", 
+                               "highway_popwtdist", "broad", 
+                               "broad_prct", "broad_11"))
 
-built3 <- built %>% select(fips, broad_16) %>% mutate(
-  year = "16")
-
-built4 <- built %>% select(fips, broad_11) %>% mutate(
-  year = "11")
-
-built5 <- built %>% select(fips, highway_km) %>% mutate(
-  year = "07")
-
-built6 <- built %>% select(fips, pc1b_manufacturing, pc2b_infrastructure) %>% mutate(
-  year = "2021")
-
-# Join data
-built <- purrr::reduce(list(built1, built2, built3, built4, built5, built6), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
-
-built <- built %>% mutate(
-  year = str_pad(year, side = "left", pad = "0" , width = 3), 
-  year = str_pad(year, side = "left", pad = "2", width = 4))
-
-rm(built1, built2, built3, built4, built5, built6)
-
-# Pivot longer
-built <- built %>% pivot_longer(
-  cols = !c(fips, year), 
-  values_to = "value", 
-  names_to = "variable_name") %>% filter(!is.na(value))
+# Add year variable and remove year from variable name 
+built <- built %>% 
+  mutate(
+    year = case_when(
+      str_detect(variable_name, "^pc") ~ NA,
+      str_detect(variable_name, "^highway") ~ "2007", 
+      TRUE ~ str_c("20", str_sub(variable_name, -2,-1), sep = "")), 
+    variable_name = case_when(
+      !is.na(year) ~ str_sub(variable_name, 1,-4), 
+      TRUE ~ variable_name)) %>%
+  filter(!is.na(value))
 
 # Create column topic area 
-built <- built %>% mutate(
-  topic_area = ifelse(
-    variable_name == "est_CBP" | 
-      variable_name =="foodbev_est_CBP", "Food Processors", "Infrastructure"))
+built <- built %>% 
+  mutate(
+    category = case_when(
+      str_detect(variable_name, "CBP") ~ "Processing & Distribution", 
+      TRUE ~ "Community Characteristics"), 
+    topic_area = case_when(
+      str_detect(variable_name, "CPB") ~ "Food Processors", 
+      TRUE ~ "Infrastructure"))
 
 # Meta built 
 meta_built <- built %>% 
-  select(topic_area, variable_name) %>% 
+  select(category, topic_area, variable_name) %>% 
   distinct()
 
 # Add meta variables 
 meta_built <- meta_built %>% 
   mutate(
-    category = "Community Characteristics", 
-    `2 pager title` = "Community wealth", 
     user_friendly_variable_name = case_when(
-      variable_name == "highway_km" ~ 
-        "Interstate highway, inverse of population-weighted distance (km) to nearest interstate highway ramp", 
-      variable_name == "foodbev_est_CBP" ~ 
-        "Manufacturing, food & beverage manufacturing estab. per 10,000 people", 
+      variable_name == "broad_advanced_telecomm" ~ 
+        "Broadband, percent of population with access to fixed advanced telecomm", 
+      variable_name == "broad_terrestrial" ~ 
+        "Broadband, percent of population with access to fixed terrestrial broadband", 
       variable_name == "est_CBP" ~ 
         "Manufacturing, other manufacturing estab. per 10,000 people", 
-      variable_name == "broad_11" ~ 
-        "Broadband, percent of population with access to fixed terrestrial broadband", 
-      variable_name == "broad_16" ~
-        "Broadband, percent of population with access to fixed advanced telecomm", 
+      variable_name == "foodbev_est_CBP" ~ 
+        "Manufacturing, food & beverage manufacturing estab. per 10,000 people", 
+      variable_name == "highway" ~ 
+        "Interstate highway, inverse of population-weighted distance (km) to nearest interstate highway ramp", 
       variable_name == "pc1b_manufacturing" ~ 
         "Built capital - manufacturing", 
       variable_name == "pc2b_infrastructure" ~ 
         "Built capital - highway and broadband infrastructure"), 
     variable_definition = case_when(
-            variable_name == "highway_km" ~ 
-        "Inverse of population-weighted distance (km) to nearest interstate highway ramp", 
-      variable_name == "foodbev_est_CBP" ~ 
-        "Food & beverage manufacturing establishments per 10,000 people ", 
+      variable_name == "broad_advanced_telecomm" ~ 
+        "Percent of population with access to fixed advanced telecomm", 
+      variable_name == "broad_terrestrial" ~ 
+        "Percent of population with access to fixed terrestrial broadband at least 25 mbps download/3 mbps upload", 
       variable_name == "est_CBP" ~ 
         "Other manufacturing establishments per 10,000 people", 
-      variable_name == "broad_11" ~ 
-        "Percent of population with access to fixed terrestrial broadband at ≥ 25 mbps download/3 mbps upload", 
-      variable_name == "broad_16" ~
-        "Percent of population with access to fixed advanced telecomm", 
+      variable_name == "foodbev_est_CBP" ~ 
+        "Food & beverage manufacturing establishments per 10,000 people ", 
+      variable_name == "highway" ~ 
+        "Inverse of population-weighted distance (km) to nearest interstate highway ramp", 
       variable_name == "pc1b_manufacturing" ~ 
-        "Built capital - manufacturing, author constructed from a principal component analysis", 
+        "Constructed index derived from a principal component analysis of built capital including manufacturing", 
       variable_name == "pc2b_infrastructure" ~ 
-        "Built capital - highway and broadband infrastructure, author constructed from a principal component analysis"),
-    periodicity = "various",
+        "Constructed index derived from a principal component analysis of built capital, including highway and broadband infrastructure"), 
+    periodicity = case_when(
+      str_detect(variable_name, "^pc") ~ NA,
+      TRUE ~ "yearly"),
     aggregation = case_when(
       str_detect(variable_name, "CBP") ~ "count", 
       str_detect(variable_name, "broad") ~ "percent", 
-      variable_name == "highway_km" ~ "mean", 
+      variable_name == "highway" ~ "mean", 
       str_detect(variable_name, "pc") ~ "unitless"), 
     format = case_when(
       str_detect(variable_name, "broad") ~ "percent", 
       TRUE ~ "integer"),
     keywords = "capitals|built capital", 
-    hashtags = NA , 
+    hashtags = "#builtcapital|#infrastructure", 
     chart_type1 = "BarChart", 
     chart_type2 = NA, 
     chart_axis_x1 = user_friendly_variable_name,
     chart_axis_x2 = NA, 
     chart_axis_y1 = NA, 
-    chart_axis_y2 = NA)
+    chart_axis_y2 = NA, 
+    source = case_when(
+      str_detect(variable_name, "CBP") ~ 
+        "U.S. Census Bureau, County Business Patterns", 
+      str_detect(variable_name, "^pc") ~
+        "Schmit et al., 2021", 
+      variable_name == "highway" ~ "Dicken et al., 2011", 
+      variable_name == "broad_advanced_telecomm" ~ "Federal Communications Commission (FCC), 2016", 
+      variable_name == "broad_terrestrial" ~ "NTIA State Broadband Initiative, 2011"),
+    url = case_when(
+      str_detect(variable_name, "CBP") ~ 
+        "https://www.census.gov/data/datasets/2010/econ/cbp/2010-cbp.html; https://www.census.gov/data/datasets/2010/econ/cbp/2015-cbp.html", 
+      str_detect(variable_name, "^pc") ~
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981", 
+      variable_name == "highway" ~ NA, 
+      variable_name == "broad_advanced_telecomm" ~ 
+        "https://www.fcc.gov/reports-research/maps/connect2health/background.html", 
+      variable_name == "broad_terrestrial" ~ 
+        "https://www2.ntia.doc.gov/Jun-2011-datasets"),
+    citation = case_when(
+      str_detect(variable_name, "CBP") ~ "U.S. Census Bureau, County Business Patterns", 
+      str_detect(variable_name, "^pc") ~ "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)", 
+      variable_name == "highway" ~ 
+        "Dicken, C., Williams, W., Breneman, V., 2011. County-level highway access measures. U.S. Department of Agriculture, Economic Research Service", 
+      variable_name == "broad_advanced_telecomm" ~ 
+        "Federal Communications Commission (FCC), Connect2Health, Data", 
+      variable_name == "broad_terrestrial" ~ 
+      "Derived from NTIA State Broadband Initiative, 2011 data"))
   
 ```
 
-### Cultural capital
+## Cultural capital
 
 Cultural capital includes create_jobs, racial_div, pub_lib, create_indus_09, create_indus_14, museums, pc1c_artsdiversity and pc2c_creativeindustries.
 
@@ -215,21 +272,27 @@ The following are NOT calculated at the state/national level. racial_div is not 
 ```{r cultural}
 
 # Select variables to be used in county level 
-cultural_county <- capitals %>% select(
-  fips, create_jobs, total_emp, White_not_Latino2010,African_American2010,
-  Native_American2010, Asian_American2010, Other2010, Latino2010, pub_lib, create_indus_09, create_indus_14, museums, pc1c_artsdiversity, pc2c_creativeindustries)
+cultural_county <- capitals %>% 
+  select(
+    fips, create_jobs, total_emp, White_not_Latino2010, 
+    African_American2010, Native_American2010, Asian_American2010, Other2010,
+    Latino2010, pub_lib, create_indus_09, create_indus_14, museums,
+    pc1c_artsdiversity, pc2c_creativeindustries) %>% 
+  left_join(county)
 
 # Create state-level variables
-cultural_state <- capitals %>% group_by(state) %>% select(
-  state, create_jobs, total_emp) %>% summarise_all(
-    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
-      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
-        state_code, create_jobs, total_emp)  %>% rename(
-          fips = state_code) 
+cultural_state <- cultural_county %>% 
+  group_by(state_name) %>% 
+  summarise(across(c(create_jobs, total_emp), 
+                   ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(state)
 
 # Create national-level variables
-cultural_us <- cultural_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
-  fips = "00")
+cultural_us <- cultural_state %>% 
+  summarise(across(create_jobs:total_emp, 
+                   ~sum(.x))) %>% 
+  mutate(fips = "00", 
+         state_name = "US")
 
  # Bind data so we have one data frame with US, state, and county level data
 cultural <- bind_rows(cultural_county, cultural_state, cultural_us)
@@ -240,53 +303,51 @@ cultural <- cultural  %>%  mutate(
   create_jobs= create_jobs/total_emp,
   racial_div = (10000- (White_not_Latino2010^2 +	African_American2010^2 + Native_American2010^2 + Asian_American2010^2 + Other2010^2 + Latino2010^2))/833.333333333333)
 
-cult1 <- cultural %>% select(fips, create_jobs) %>% mutate(
-  year = "2013")
-cult2 <- cultural %>% select(fips, racial_div) %>% mutate(
-  year = "2010")
-cult3 <- cultural %>% select(fips, pub_lib) %>% mutate(
-  year = "2012")
-cult4 <- cultural %>% select(fips, create_indus_09, create_indus_14) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "create_indus_",
-  values_to = "create_indus") %>% mutate(
-    year = str_pad(year, side = "left", pad = "0" , width = 2),
-    year = str_pad(year, side = "left", pad = "0" , width = 3),
-    year = str_pad(year, side = "left", pad = "2", width = 4))
+# Drop variables not needed 
+cultural <- cultural %>% 
+  select(-ends_with("2010"), -total_emp)
 
-cult5 <- cultural %>% select(fips, museums) %>% mutate(
-  year = "2015")
-cult6 <- cultural %>% select(fips, pc1c_artsdiversity, pc2c_creativeindustries) %>% mutate(
-  year = "2021")
+# Pivot longer 
+cultural <- cultural %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
 
-# Join data
-cultural <- purrr::reduce(list(cult1,cult2, cult3, cult4, cult5, cult6), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) %>% select(fips, year, everything())
-
-rm(cult1,cult2, cult3, cult4, cult5, cult6)
-
-# Pivot longer
-cultural <- cultural %>% pivot_longer(
-  cols = !c(fips, year), 
-  values_to = "value", 
-  names_to = "variable_name") %>% filter(!is.na(value))
+# Add year and variable name without year
+cultural <- cultural %>% 
+  mutate(
+    year = case_when(
+      str_detect(variable_name, "create_indus") ~ 
+        str_c("20", str_sub(variable_name, -2, -1), sep = ""), 
+      variable_name == "create_jobs" ~ "2013",
+      variable_name == "racial_div" ~ "2010", 
+      variable_name == "pub_lib" ~ "2012", 
+      variable_name == "museums" ~ "2015", 
+      TRUE ~ "2021"),  
+    variable_name = case_when(
+      str_detect(variable_name, "create_indus") ~ "create_indus", 
+      TRUE ~ variable_name)) %>% 
+  filter(!is.na(value))
 
 # Add topic area
 cultural <- cultural %>% mutate(
-  topic_area = ifelse(
-    variable_name=="racial_div", "Population", "Community Resources"))
+  topic_area = case_when(
+    variable_name %in% c("racial_div", "create_jobs") ~ "Population", 
+    TRUE ~ "Community Resources"),
+  category = case_when(
+    variable_name == "create_jobs" ~ "Labor", 
+    variable_name == "racial_div" ~ "Demographics", 
+    TRUE ~ "Community Characteristics"))
 
-
-# Meta built 
+# Meta 
 meta_cultural <- cultural %>% 
-  select(topic_area, variable_name) %>% 
+  select(category, topic_area, variable_name) %>% 
   distinct()
 
 # Add meta variables 
 meta_cultural <- meta_cultural %>% 
   mutate(
-    category = "Community Characteristics", 
-    `2 pager title` = "Community wealth", 
     user_friendly_variable_name = case_when(
       variable_name == "create_indus" ~ 
         "Creative industry businesses per 100,000 population", 
@@ -314,10 +375,12 @@ meta_cultural <- meta_cultural %>%
       variable_name == "museums" ~
         "Museums per 100,000 people", 
       variable_name == "pc1c_artsdiversity" ~
-        "Cultural capital - Arts and diversity, author constructed from a principal component analysis", 
+        "Constructed index derived from a principal component analysis of cultural capital, including arts and diversity", 
       variable_name == "pc2c_creativeindustries" ~  
-        "Cultural capital - Creative industries, author constructed from a principal component analysis"), 
-    periodicity = "various",
+        "Constructed index derived from a principal component analysis of cultural capital including creative industries"), 
+    periodicity = case_when(
+      str_detect(variable_name, "^pc") ~ NA, 
+      TRUE ~ "yearly"), 
     aggregation = case_when(
       variable_name %in% c("create_indus", "pub_lib", "museums") ~ "#/10,000", 
       variable_name == "racial_div" ~ "index",
@@ -333,91 +396,117 @@ meta_cultural <- meta_cultural %>%
     chart_axis_x1 = user_friendly_variable_name,
     chart_axis_x2 = NA, 
     chart_axis_y1 = NA, 
-    chart_axis_y2 = NA)
+    chart_axis_y2 = NA, 
+    source = case_when(
+      variable_name == "create_jobs" ~ 
+        "U.S. Department of Agriculture, Economic Research Service, Creative Class Codes",
+      variable_name == "racial_div" ~ 
+        "U.S. Census Bureau, Modified Race Data", 
+      variable_name %in% c("pub_lib", "create_indus", "museums") ~ 
+        "Kushner & Cohen, Local Arts Index (2018)", 
+      str_detect(variable_name, "^pc") ~ "Schmit et al., 2021"), 
+    url = case_when(
+      variable_name == "create_jobs" ~ 
+        "https://www.ers.usda.gov/data-products/creative-class-county-codes.aspx ",
+      variable_name == "racial_div" ~ 
+        "https://www.census.gov/data/datasets/2010/demo/popest/modified-race-data-2010.html", 
+      variable_name %in% c("pub_lib", "create_indus", "museums") ~ 
+        "https://www.icpsr.umich.edu/web/NADAC/studies/36984/variables",
+      str_detect(variable_name, "^pc") ~
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981"),  
+    citation = case_when(
+      variable_name == "create_jobs" ~ 
+        "U.S. Department of Agriculture, Economic Research Service, Creative Class Codes",
+      variable_name == "racial_div" ~ 
+        "U.S. Census Bureau, Modified Race Data", 
+      variable_name %in% c("pub_lib", "create_indus", "museums") ~ 
+        "Kushner, R.L. and R. Cohen. 2018. Local Arts Index (LAI), United States, 2009-2015 (ICPSR 36984)", 
+      str_detect(variable_name, "^pc") ~ "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)"))
+      
 ```
 
-### Financial capital
+## Financial capital
 
 Financial capital includes localgovfin_07, localgovfin_12, owner_occupied_2010, owner_occupied_2012, and pc1f.
 
 ```{r financial}
 
 # Financial variables at the county level
-financial_county <- capitals %>% select(
-  fips, localgovfin_07, localgovfin_12, 
-  deposits, owner_occupied_2010, owner_occupied_2012,
-  pop_10_CBP_new, pop_12, pop_15_CBP, pc1f)
+financial_county <- capitals %>% 
+  select(
+    fips, localgovfin_07, localgovfin_12, 
+    deposits, owner_occupied_2010, owner_occupied_2012,
+    pop_10_CBP_new, pop_12, pop_15_CBP, pc1f) %>% 
+  left_join(county)
 
 # Financial variables at the state level
-financial_state <- capitals %>% group_by(state) %>% select(
-  localgovfin_07, localgovfin_12, 
-  deposits, owner_occupied_2010, owner_occupied_2012,
-  pop_10_CBP_new, pop_12, pop_15_CBP) %>% summarise_all(
-    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
-      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
-        state_code, localgovfin_07:pop_15_CBP)  %>% rename(
-          fips = state_code)
+financial_state <- financial_county %>% 
+  group_by(state_name) %>% 
+  summarise(across(c(localgovfin_07, localgovfin_12, 
+                     deposits, owner_occupied_2010, 
+                     owner_occupied_2012, pop_10_CBP_new, 
+                     pop_12, pop_15_CBP), 
+                   ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(state)
 
 # Summarise data at the US level
-financial_us <- financial_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
-  fips = "00")
+financial_us <- financial_state %>% 
+  summarise(across(localgovfin_07:pop_15_CBP, 
+                   ~sum(.x))) %>% 
+  mutate(fips = "00", 
+         state_name = "US")
 
  # Bind data so we have one data frame with US, state, and county level data
 financial <- bind_rows(financial_county, financial_state, financial_us)
 rm(financial_county, financial_state, financial_us)
 
 # Express variables in per-capita or per-square mile (code taken from AEPP do file)
-financial <- financial %>% mutate(
-  localgovfin_07 = localgovfin_07/pop_10_CBP_new, 
-  localgovfin_12 = localgovfin_12/pop_12,
-  deposits = deposits/pop_15_CBP,
-  owner_occupied_2010 = owner_occupied_2010/pop_10_CBP_new, 
-  owner_occupied_2012 = owner_occupied_2012/pop_12)
+financial <- financial %>% 
+  mutate(
+    localgovfin_07 = localgovfin_07/pop_10_CBP_new, 
+    localgovfin_12 = localgovfin_12/pop_12,
+    deposits = deposits/pop_15_CBP,
+    owner_occupied_2010 = owner_occupied_2010/pop_10_CBP_new, 
+    owner_occupied_2012 = owner_occupied_2012/pop_12)
 
-# Add year variables
-fin1 <- financial %>% select(
-  fips, localgovfin_07, localgovfin_12) %>% pivot_longer(
-    cols = !fips, 
-    names_to = "year", 
-    names_prefix = "localgovfin_",
-    values_to = "localgovfin")  %>% mutate(
-  year = str_pad(year, side = "left", pad = "0" , width = 3), 
-  year = str_pad(year, side = "left", pad = "2", width = 4))
+# Drop variables not needed 
+financial <- financial %>% 
+  select(-starts_with("pop"))
+  
+# Pivot longer 
+financial <- financial %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
 
-fin2 <- financial %>% select(
-  fips, owner_occupied_2010, owner_occupied_2012) %>% pivot_longer(
-    cols = !fips, 
-    names_to = "year", 
-    values_to = "owner_occupied", 
-    names_prefix = "owner_occupied_")
+# Add year variables and remove year from variable name 
+financial <- financial %>% 
+  mutate(
+    year = case_when(
+      variable_name == "deposits" ~ "2016", 
+      variable_name == "pc1f" ~ "2021", 
+      TRUE ~ str_c("20", str_sub(variable_name, -2, -1), sep = "")), 
+    variable_name = case_when(
+      variable_name %in% c("deposits", "pc1f") ~ variable_name,
+      str_detect(variable_name, "localgovfin") ~ str_remove(variable_name, ".{3}$"),
+      TRUE ~ str_remove(variable_name, ".{5}$"))) %>% 
+  filter(!is.na(value)) 
 
-fin3 <- financial %>% select(fips, deposits) %>% mutate(
-  year = "2016")
-
-fin4 <- financial %>% select(fips, pc1f) %>% mutate(
-  year = "2021")
-
-# Join data
-financial <- purrr::reduce(list(fin1, fin2, fin3, fin4), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
-rm(fin1, fin2, fin3, fin4)
-
-# Pivot longer
-financial <- financial %>% pivot_longer(
-  cols = !c(fips, year), 
-  values_to = "value", 
-  names_to = "variable_name") %>% filter(!is.na(value)) %>% mutate(
+# Add variables 
+financial <- financial %>% 
+  mutate(
+    category = "Community Characteristics", 
     topic_area = "Financial")
 
 # Meta 
 meta_financial <- financial %>% 
-  select(topic_area, variable_name) %>% 
+  select(category, topic_area, variable_name) %>% 
   distinct()
 
 # Add meta variables 
 meta_financial <- meta_financial %>% 
   mutate(
-    category = "Community Characteristics", 
-    `2 pager title` = "Community wealth", 
     user_friendly_variable_name = case_when(
       variable_name == "localgovfin" ~ 
         "Cash & security holdings less government debt per capita", 
@@ -436,50 +525,84 @@ meta_financial <- meta_financial %>%
         "Bank deposits per capita at FDIC-insured institutions", 
       variable_name == "pc1f" ~ 
         "Financial capital - financial solvency, author constructed from a principal component analysis"), 
-    periodicity = "various",
-    aggregation = "count",
+    periodicity = case_when(
+      str_detect(variable_name, "^pc") ~ NA, 
+      TRUE ~ "yearly"),
+    aggregation = case_when(
+      str_detect(variable_name, "^pc") ~ "unitless", 
+      TRUE ~ "count"),
     format = "integer",
     keywords = "capitals|financial capital", 
-    hashtags = NA , 
+    hashtags = "#financialcapital|#finances|#investments" , 
     chart_type1 = "BarChart", 
     chart_type2 = NA, 
     chart_axis_x1 = user_friendly_variable_name,
     chart_axis_x2 = NA, 
     chart_axis_y1 = NA, 
-    chart_axis_y2 = NA)
+    chart_axis_y2 = NA, 
+    source = case_when(
+      variable_name == "localgovfin" ~ 
+        "U.S. Census Bureau, Annual survey of state and local government finance", 
+      variable_name == "deposits" ~ 
+        "Federal Deposit Insurance Corporation (FDIC)", 
+      variable_name == "owner_occupied" ~ 
+        "U.S. Census Bureau, American Community Survey", 
+      variable_name == "pc1f" ~ "Schmit et al., 2021"),
+    url = case_when(
+      variable_name == "localgovfin" ~ 
+        "https://www.census.gov/programs-surveys/gov-finances/data/historical-data.html", 
+      variable_name == "deposits" ~ 
+        "https://www7.fdic.gov/sod/sodMarketBank.asp?barItem=2", 
+      variable_name == "owner_occupied" ~ 
+        "https://www.census.gov/acs/www/data/data-tables-and-tools/subject-tables/", 
+      variable_name == "pc1f" ~ 
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981"),
+    citation = case_when(
+      variable_name == "localgovfin" ~ 
+        "U.S. Census Bureau, Annual survey of state and local government finance. Historical data (formerly Special 60). File: _IndFin_1967-2012", 
+      variable_name == "deposits" ~ 
+        "Federal Deposit Insurance Corporation (FDIC), Deposit Market Share Reports - Summary of Deposits", 
+      variable_name == "owner_occupied" ~ 
+        "U.S. Census Bureau, American Community Survey, table S2507", 
+      variable_name == "pc1f" ~ 
+        "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)"))
   
 ```
 
-### Human capital
+## Human capital
 
 Human capital includes ed_attain_10, ed_attain_15, health_factors, health_outcomes, rood_secure_rev, food_secure_10, insured_13, insured_10, primary_care_17, primary_care_10, pc1h_healtheducation, pc2h_medicalfoodsecurity. Note, food_secure_rev is from 2014
 
 Note that ed_attain for 2010 is already a percentage, so don't need to divide by population. Variables we cannot provide state and national totals include ed_attain_10, food_secure_rev, food_secure_10, insured_13, insured_10 as they are provided as percentages.
 
-```{r human}
+```{r}
 
 # County level data 
-human_county <- capitals %>% select(
-  fips,
-  ed_attain_10, ed_attain_15,
-  health_factors, health_outcomes,
-  food_secure_rev, food_secure_10, 
-  insured_13, insured_10,
-  primary_care_17, primary_care_10,
-   pop_10_CBP_new, pop_15_CBP, adult_pop_15, 
-  pc1h_healtheducation, pc2h_medicalfoodsecurity)
+human_county <- capitals %>% 
+  select(
+    fips,
+    ed_attain_10, ed_attain_15,
+    health_factors, health_outcomes,
+    food_secure_rev, food_secure_10, 
+    insured_13, insured_10,
+    primary_care_17, primary_care_10,
+    pop_10_CBP_new, pop_15_CBP, adult_pop_15, 
+    pc1h_healtheducation, pc2h_medicalfoodsecurity) %>% 
+  left_join(county)
 
 # State level data
-human_state <- capitals %>% group_by(state) %>% select(
-  ed_attain_15, primary_care_17, primary_care_10) %>% summarise_all(
-    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
-      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
-        state_code, ed_attain_15, primary_care_17, primary_care_10)  %>% rename(
-          fips = state_code)
+human_state <- human_county %>% 
+  group_by(state_name) %>% 
+  summarise(across(c(ed_attain_15, primary_care_17, primary_care_10), 
+                   ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(state)
 
 # Summarize data at the US level
-human_us <- human_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
-  fips = "00")
+human_us <- human_state %>% 
+  summarise(across(c(ed_attain_15, primary_care_17, primary_care_10), 
+                   ~sum(.x))) %>% 
+  mutate(fips = "00", 
+         state_name = "US")
 
  # Bind data so we have one data frame with US, state, and county level data
 human <- bind_rows(human_county, human_state, human_us)
@@ -497,74 +620,50 @@ human <- human %>% mutate(
   primary_care_10=10000*primary_care_10/pop_10_CBP_new) %>% 
   rename(food_secure_14 = food_secure_rev)
 
-hum1 <- human %>% select(fips, ed_attain_10, ed_attain_15) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "ed_attain_", 
-  values_to = "ed_attain")
+# Drop variables we don't need anymore 
+human <- human %>% 
+  select(!contains("pop_"))
 
-hum2 <- human %>% select(fips, health_factors, health_outcomes) %>% mutate(
-  year = "2013")
+# Pivot longer 
+human <- human %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
 
-hum3 <- human %>% select(fips, food_secure_10, food_secure_14) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "food_secure_", 
-  values_to = "food_secure")
-
-hum4 <- human %>% select(fips, insured_10, insured_13) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "insured_", 
-  values_to = "insured")
-
-hum5 <- human %>% select(fips, primary_care_10, primary_care_17) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "primary_care_", 
-  values_to = "primary_care")
-
-hum6 <- human %>% select(fips, pc1h_healtheducation, pc2h_medicalfoodsecurity) %>% mutate(
-  year = "2021")
-
-# Join data
-human <- purrr::reduce(list(hum1, hum2, hum3, hum4, hum5, hum6), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
-
-human <- human %>% mutate(
-  year = str_pad(year, side = "left", pad = "0" , width = 3), 
-  year = str_pad(year, side = "left", pad = "2", width = 4))
-
-#write_csv(human, "community_wealth/human_capital.csv")
-rm(hum1, hum2, hum3, hum4, hum5)
-
-# Pivot longer
-human <- human %>% pivot_longer(
-  cols = !c(fips, year), 
-  values_to = "value", 
-  names_to = "variable_name") %>% filter(!is.na(value)) 
+# Add year and remove year from variable name 
+human <- human %>% 
+  mutate(
+    year = case_when(
+      str_detect(variable_name, "^health") ~ "2013",
+      str_detect(variable_name, "^pc") ~ "2021",
+      TRUE ~ str_c("20", str_sub(variable_name, -2, -1), sep = "")), 
+    variable_name = case_when(
+      str_detect(variable_name, "^health|^pc") ~ variable_name, 
+      TRUE ~ str_remove(variable_name, ".{3}$"))) %>% 
+  filter(!is.na(value)) 
 
 # Add topic areas
 human <- human %>% mutate(
   topic_area = case_when(
-    variable_name=="pc1h_healtheducation" |
-      variable_name=="pc2h_medicalfoodsecurity" |
-    variable_name %in% c("ed_attain", "insured", "health_factors", "health_outcomes") ~
-      "Population", 
-    variable_name=="food_secure" ~ "Food Insecurity", 
-    variable_name=="primary_care" ~ "Community Resources"))
+    variable_name == "food_secure" ~ "Food Insecurity", 
+    variable_name == "primary_care" ~ "Community Resources",
+    TRUE ~ "Population"), 
+  category = case_when(
+    variable_name == "ed_attain" ~ "Institutions", 
+    variable_name %in% c("health_factors", "health_outcomes", "insured") ~ 
+      "Demographics", 
+    variable_name == "food_secure" ~ "Food Access", 
+    TRUE ~ "Community Characteristics"))
 
 # Meta
 meta_human <- human %>% 
-  select(topic_area, variable_name) %>% 
+  select(category, topic_area, variable_name) %>% 
   distinct()
 
 # Add meta variables 
 meta_human <- meta_human %>% 
   mutate(
-    category = case_when(
-      variable_name == "food_secure" ~ "Food Access", 
-      TRUE ~ "Community Characteristics"), 
-    `2 pager title` = "Community wealth", 
     user_friendly_variable_name = case_when(
       variable_name == "ed_attain" ~ 
         "Education, percent of adult population with at least a Bachelor's degree", 
@@ -579,76 +678,115 @@ meta_human <- meta_human %>%
       variable_name == "health_outcomes" ~ 
         "Health Outcome Z-Score", 
       variable_name == "pc1h_healtheducation" ~
-        "Human capital – health-related aspects", 
+        "Human capital, health-related aspects", 
       variable_name == "pc2h_medicalfoodsecurity" ~
-        "Human capital – food and health security"), 
+        "Human capital, food and health security"), 
     variable_definition = case_when(
       variable_name == "ed_attain" ~ 
         "Percent of adult population with at least a Bachelor's degree", 
-      variable_name == "food_secure" ~ , 
-      variable_name == "insured" ~, 
-      variable_name == "primary_care" ~ , 
+      variable_name == "food_secure" ~ 
+        "Percent of population with adequate access to food", 
+      variable_name == "insured" ~
+        "Percent of the population under 65 with health insurance", 
+      variable_name == "primary_care" ~ 
+        "Number of primary care physicians per 10,000 population", 
       variable_name == "health_factors" ~ 
-        "Health Factors Z-Score", 
-      variable_name == "health_outcomes" ~ , 
-      variable_name == "pc1h_healtheducation" ~, 
-      variable_name == "pc2h_medicalfoodsecurity" ~) 
-    periodicity = "various",
+        "Measure of health behaviors, clinical care, social and economic factors, and physical environment; a positive Z-score indicates a value higher than the average of counties in that state, and a negative Z-score indicates a value for that county lower than the average of counties in that state", 
+      variable_name == "health_outcomes" ~ 
+        "Measure of how long people live on average within a community, and how much physical and mental health people experience in a community while they are alive; a positive Z-score indicates a value higher than the average of counties in that state, and a negative Z-score indicates a value for that county lower than the average of counties in that state", 
+      variable_name == "pc1h_healtheducation" ~
+        "Constructed index derived from a principal component analysis of human capital data including educational attainment, health factor and outcome score from the Robert Wood Johnson Foundation", 
+      variable_name == "pc2h_medicalfoodsecurity" ~
+        "Constructed index derived from a principal component analysis of human capital data including percent of population food secure, percent of population with health insurance, and number of primary care physicians per 10,000"), 
+    periodicity = case_when(
+      str_detect(variable_name, "^pc") ~ NA, 
+      TRUE ~ "yearly"), 
     aggregation = case_when(
-      variable_name == "ed_attain" ~ , 
-      variable_name == "food_secure" ~ , 
-      variable_name == "insured" ~, 
-      variable_name == "primary_care" ~ , 
-      variable_name == "health_factors" ~ , 
-      variable_name == "health_outcomes" ~ , 
-      variable_name == "pc1h_healtheducation" ~, 
-      variable_name == "pc2h_medicalfoodsecurity" ~), 
+      variable_name == "ed_attain" ~ "percent", 
+      variable_name == "food_secure" ~ "percent", 
+      variable_name == "insured" ~ "percent", 
+      variable_name == "primary_care" ~ "#/10,000", 
+      variable_name == "health_factors" ~ "unitless", 
+      variable_name == "health_outcomes" ~ "unitless", 
+      variable_name == "pc1h_healtheducation" ~ "unitless", 
+      variable_name == "pc2h_medicalfoodsecurity" ~ "unitless"), 
     format = case_when(
-      variable_name == "ed_attain" ~ , 
-      variable_name == "food_secure" ~ , 
-      variable_name == "insured" ~, 
-      variable_name == "primary_care" ~ , 
-      variable_name == "health_factors" ~ , 
-      variable_name == "health_outcomes" ~ , 
-      variable_name == "pc1h_healtheducation" ~, 
-      variable_name == "pc2h_medicalfoodsecurity" ~), 
-      
-      "integer",
-    keywords = "capitals|financial capital", 
-    hashtags = NA , 
+      variable_name == "ed_attain" ~ "percent", 
+      variable_name == "food_secure" ~ "percent", 
+      variable_name == "insured" ~ "percent", 
+      variable_name == "primary_care" ~ "integer", 
+      variable_name == "health_factors" ~ "integer", 
+      variable_name == "health_outcomes" ~ "integer", 
+      variable_name == "pc1h_healtheducation" ~ "integer", 
+      variable_name == "pc2h_medicalfoodsecurity" ~ "integer"), 
+    keywords = "capitals|human capital", 
+    hashtags = "#humancapital|#humanresources", 
     chart_type1 = "BarChart", 
     chart_type2 = NA, 
     chart_axis_x1 = user_friendly_variable_name,
     chart_axis_x2 = NA, 
     chart_axis_y1 = NA, 
-    chart_axis_y2 = NA)
+    chart_axis_y2 = NA, 
+    source = case_when(
+      variable_name == "ed_attain" ~ 
+        "U.S. Census Bureau, American Community Survey", 
+      variable_name == "food_secure" ~ 
+        "Feeding America, Map the Meal Gap", 
+      str_detect(variable_name, "^pc") ~ "Schmit et al., 2021",
+      TRUE ~ "Robert Wood Johnson Foundation, County Health Rankings"),
+    url = case_when(
+      variable_name == "ed_attain" ~ 
+        "https://www.census.gov/acs/www/data/data-tables-and-tools/subject-tables/", 
+      variable_name == "food_secure" ~ 
+        "https://www.feedingamerica.org/research/map-the-meal-gap/by-county", 
+      str_detect(variable_name, "^pc") ~
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981",
+      TRUE ~ 
+        "https://www.countyhealthrankings.org/explore-health-rankings/rankings-data-documentation/national-data-documentation-2010-2019"), 
+    citation = case_when(
+      variable_name == "ed_attain" ~ 
+        "U.S. Census Bureau, American Community Survey, Table S1501", 
+      variable_name == "food_secure" ~ 
+        "Feeding America, Map the Meal Gap", 
+      str_detect(variable_name, "^pc") ~ 
+        "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)", 
+      TRUE ~  "Robert Wood Johnson Foundation, County Health Rankings"))
+
 ```
 
-### Natural capital
+## Natural capital
 
 Natural capital includes natamen_scale, prime_farmland, conserve_acre, acre_FSA, acre_NFS, pc1n_naturalamenitiesconservation, and pc2n_farmland.
 
 natamen_scale not provided at the state/national level.
 
-```{r natural}
+```{r}
 
 # County level data
-natural_county <- capitals %>% select(
-  fips, natamen_scale, prime_farmland, conserve_acre, acre_FSA, acre_NFS, pc1n_naturalamenitiesconservation, pc2n_farmland, 
-  acres, acre_all)
+natural_county <- capitals %>% 
+  select(
+    fips, natamen_scale, prime_farmland, conserve_acre, 
+    acre_FSA, acre_NFS, pc1n_naturalamenitiesconservation, pc2n_farmland, 
+    acres, acre_all) %>% 
+  left_join(county)
 
 # State level data
 natural_state <- capitals %>% group_by(state) %>% select(
   prime_farmland, conserve_acre, acre_FSA, acre_NFS,  
-  acres, acre_all) %>% summarise_all(
-    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
-      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
-        state_code, prime_farmland:acre_all)  %>% rename(
-          fips = state_code)
+  acres, acre_all) %>% 
+  summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% 
+  mutate(across(
+      state, ~str_to_title(.x))) %>% 
+  rename(state_name = state) %>%
+  left_join(state) 
 
 # Summarise data at the US level
-natural_us <- natural_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
-  fips = "00")
+natural_us <- natural_state %>% 
+  summarise(across(prime_farmland:acre_all, ~sum(.x))) %>% 
+  mutate(
+    fips = "00", 
+    state_name = "US")
 
  # Bind data so we have one data frame with US, state, and county level data
 natural <- bind_rows(natural_county, natural_state, natural_us)
@@ -661,52 +799,169 @@ natural <- natural %>% mutate(
   acre_FSA = acre_FSA/acre_all, 
   acre_NFS = acre_NFS/acre_all)
 
-nat1 <- natural %>% select(fips, prime_farmland) %>% mutate(year="2012")
-nat2 <- natural %>% select(fips, conserve_acre) %>% mutate(year="2016")
-nat3 <- natural %>% select(fips, acre_FSA, acre_NFS) %>% mutate(year = "2017") 
-nat4 <- natural %>% select(fips, natamen_scale) %>% mutate(year = "1999")
-nat5 <- natural %>% select(fips, pc1n_naturalamenitiesconservation, pc2n_farmland) %>% mutate(year = NA)
+# Drop acres and acres all
+natural <- natural %>% 
+  select(-acres, -acre_all)
 
-# Join data
-natural<- purrr::reduce(list(nat1, nat2, nat3, nat4, nat5), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) %>% select(fips, year, everything())
+# Pivot longer 
+natural <- natural %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
+    
+# Add year and other variables 
+natural <- natural %>% 
+  mutate(
+    year = case_when(
+      variable_name == "prime_farmland" ~ "2012", 
+      variable_name == "conserve_acre" ~ "2016", 
+      variable_name %in% 
+        c("acre_FSA", "acre_NFS") ~ "2017", 
+      variable_name == "natamen_scale" ~ "1999", 
+      variable_name %in% 
+        c("c1n_naturalamenitiesconservation", "pc2n_farmland") ~ NA))
 
-#write_csv(natural, "community_wealth/natural_capital.csv")
-rm(nat1, nat2, nat3, nat4, nat5) 
+# Add topic areas and filter NA's
+natural <- natural %>% 
+  mutate(
+    category = "Community Characteristics", 
+    topic_area = case_when(
+      variable_name=="prime_farmland" ~ "Agriculture",
+      TRUE ~ "Natural")) %>% 
+   filter(!is.na(value)) 
 
-# Pivot longer
-natural <- natural %>% pivot_longer(
-  cols = !c(fips, year), 
-  values_to = "value", 
-  names_to = "variable_name") %>% filter(!is.na(value)) 
+# Meta 
+meta_natural <- natural %>% 
+  select(category, topic_area, variable_name) %>% 
+  distinct()
 
-# Add topic areas
-natural <- natural %>% mutate(
-  topic_area = ifelse(
-    variable_name=="prime_farmland", "Agriculture", "Natural"))
+# Add meta variables 
+meta_natural <- meta_natural %>% 
+  mutate(
+    user_friendly_variable_name = case_when(
+      variable_name == "acre_FSA" ~ 
+        "Conservation-related programs and woodlands, percent of total acres", 
+      variable_name == "acre_NFS" ~ 
+        "National Forests, percent of total acres", 
+      variable_name == "conserve_acre" ~ 
+        "Conservation easement, percent of total acres",
+      variable_name == "natamen_scale" ~ 
+        "Natural Amenities Scale", 
+      variable_name == "pc1n_naturalamenitiesconservation" ~ 
+        "Natural capital - natural amenity scale and share of acres in National Forest", 
+      variable_name == "pc2n_farmland" ~
+        "Natural capital - prime farmland",
+      variable_name == "prime_farmland" ~ 
+        "Farmland, percent of farmland acres designated as prime farmland"), 
+    variable_definition = case_when(
+      variable_name == "acre_FSA" ~ 
+        "Percent of total acres in conservation-related programs and woodlands", 
+      variable_name == "acre_NFS" ~ 
+        "Percent of total acres in National Forests", 
+      variable_name == "conserve_acre" ~ 
+        "Percent of total acres with conservation easement",
+      variable_name == "natamen_scale" ~ 
+        "A measure of the physical characteristics of a county area that enhance the location as a place to live. The scale was constructed by combining six measures of climate, topography, and water area that reflect environmental qualities most people prefer; <-2 is low amenities and >3 is high amenities", 
+      variable_name == "pc1n_naturalamenitiesconservation" ~
+        "Constructed index derived from a principal component analysis including natural amenity scale and share of acres in National Forest" , 
+      variable_name == "pc2n_farmland" ~
+        "Constructed index derived from a principal component analysis including prime farmland",
+      variable_name == "prime_farmland" ~ 
+        "Percent of farmland acres designated as prime farmland, defined as land that has the best combination of physical and chemical characteristics for producing food, feed, forage, fiber, and oilseed crops and that is available for these uses"), 
+    periodicity = case_when(
+      str_detect(variable_name, "^pc") ~ NA, 
+      TRUE ~ "yearly"),
+    aggregation = case_when(
+      str_detect(variable_name, "pc|natamen") ~ "unitless",
+      TRUE ~ "percent"), 
+    format = case_when(
+      aggregation == "percent" ~ "percent", 
+      TRUE ~ "integer"),
+    keywords = "capitals|natural capital", 
+    hashtags = "#naturalcapital|#nature", 
+    chart_type1 = "BarChart", 
+    chart_type2 = NA, 
+    chart_axis_x1 = user_friendly_variable_name,
+    chart_axis_x2 = NA, 
+    chart_axis_y1 = NA, 
+    chart_axis_y2 = NA, 
+    source = case_when(
+      variable_name == "acre_FSA" ~ 
+        "U.S. Department of Agriculture, Farm Service Agency (USDA FSA)", 
+      variable_name == "acre_NFS" ~ 
+        "U.S. Forest Service (USFS)",
+      variable_name == "conserve_acre" ~ 
+        "National Conservation Easement Database (NCED)", 
+      variable_name == "natamen_scale" ~ 
+        "U.S. Department of Agriculture, Economic Research Service (USDA ERS)", 
+      variable_name == "pc1n_naturalamenitiesconservation" ~ 
+        "Schmit et al., 2021", 
+      variable_name == "pc2n_farmland" ~ 
+        "Schmit et al., 2021", 
+      variable_name == "prime_farmland" ~ 
+        "U.S. Department of Agriculture, Natural Resource Conservation Service (USDA NRCS"),
+    url = case_when(
+      variable_name == "acre_FSA" ~ 
+        "https://www.fsa.usda.gov/news-room/efoia/electronic-reading-room/frequently-requested-information/crop-acreage-data/index", 
+      variable_name == "acre_NFS" ~ 
+        "https://www.fs.fed.us/land/staff/lar/LAR2017/LAR_Book_FY2017.pdf",
+      variable_name == "conserve_acre" ~ 
+        "https://www.conservationeasement.us/", 
+      variable_name == "natamen_scale" ~ 
+        "https://www.ers.usda.gov/data-products/natural-amenities-scale/", 
+      variable_name == "pc1n_naturalamenitiesconservation" ~ 
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981", 
+      variable_name == "pc2n_farmland" ~ 
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981", 
+      variable_name == "prime_farmland" ~ 
+        "https://www.nrcs.usda.gov/wps/portal/nrcs/main/national/technical/nra/nri/"),
+    citation = case_when(
+      variable_name == "acre_FSA" ~ 
+        "U.S. Department of Agriculture, Farm Service Agency (USDA FSA). 2017. FSA Crop Acreage Data", 
+      variable_name == "acre_NFS" ~ 
+        "U.S. Forest Service (USFS). 2017. Land areas of the National Forest System. FS-383",
+      variable_name == "conserve_acre" ~ 
+        "National Conservation Easement Database (NCED), 2016", 
+      variable_name == "natamen_scale" ~ 
+        "McGranahan, D., 1999. Natural Amenities Scale. U.S. Department of Agriculture, Economic Research Service", 
+      variable_name == "pc1n_naturalamenitiesconservation" ~ 
+        "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)", 
+      variable_name == "pc2n_farmland" ~ 
+        "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)", 
+      variable_name == "prime_farmland" ~ 
+        "U.S. Department of Agriculture, Natural Resource Conservation Service (USDA NRCS). 2012. National Resources Inventory"))
 ```
 
-### Social-political capital
+## Social-political capital
 
 Social political capital includes nccs09, nccs14, pvote08, pvote12, respn10, assn09, assn14, pc1s_nonprofitsocialindustries, and pc2s_publicvoiceparticipation.
 
-```{r socpol}
+```{r}
 
 # County level data 
-socpol_county <- capitals %>% select(
-  fips, nccs09, nccs14, pvote08, pvote12, respn10, assn09, assn14, 
-pc1s_nonprofitsocialindustries, pc2s_publicvoiceparticipation, 
-pop09,pop_14)
+socpol_county <- capitals %>% 
+  select(
+    fips, nccs09, nccs14, pvote08, pvote12, respn10, assn09, 
+    assn14, pc1s_nonprofitsocialindustries, 
+    pc2s_publicvoiceparticipation, pop09,pop_14) %>% 
+  left_join(county)
 
-socpol_state <- capitals %>% group_by(state) %>% select(
-  nccs09, nccs14, pop09, pop_14)%>% summarise_all(
-    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
-      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
-        state_code, nccs09:pop_14)  %>% rename(
-          fips = state_code)
+# State-level data - only available for certain variables
+socpol_state <- socpol_county %>% 
+  group_by(state_name) %>% 
+  select(
+    nccs09, nccs14, pop09, pop_14) %>% 
+  summarise(across(c(nccs09, nccs14, pop09, pop_14), 
+    ~sum(.x, na.rm = TRUE))) %>% 
+  left_join(state)
 
 # Summarise data at the US level
-socpol_us <- socpol_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
-  fips = "00")
+socpol_us <- socpol_state %>% 
+  summarise(across(nccs09:pop_14, 
+                   ~sum(.x))) %>% 
+  mutate(fips = "00", 
+         state_name = "US")
 
  # Bind data so we have one data frame with US, state, and county level data
 socpol <- bind_rows(socpol_county, socpol_state, socpol_us)
@@ -717,120 +972,145 @@ socpol <- socpol %>% mutate(
   nccs09 = 1000*nccs14/pop09, 
   nccs14 = 1000*nccs14/pop_14)
 
-sp1 <- socpol %>% select(fips, nccs09, nccs14) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "nccs", 
-  values_to = "nccs")
-
-sp2 <- socpol %>% select(fips, pvote08, pvote12) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "pvote", 
-  values_to = "pvote")
-
-sp3 <- socpol %>% select(fips, respn10) %>% mutate(
-  year = "10") %>% rename(respn = respn10)
-
-sp4 <- socpol %>% select(fips, assn09, assn14) %>% pivot_longer(
-  cols = !fips, 
-  names_to = "year", 
-  names_prefix = "assn", 
-  values_to = "assn")
-
-sp5 <- socpol %>% select(fips, pc1s_nonprofitsocialindustries, pc2s_publicvoiceparticipation) %>% mutate(year = NA)
-  
-# Join data
-socpol <- purrr::reduce(list(sp1, sp2, sp3, sp4, sp5), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
-
-socpol <- socpol %>% mutate(
-  year = str_pad(year, side = "left", pad = "0" , width = 3), 
-  year = str_pad(year, side = "left", pad = "2", width = 4))
-
-rm(sp1, sp2, sp3, sp4, sp5)
+# Drop population variables 
+socpol <- socpol %>% 
+  select(-pop09, -pop_14)
 
 # Pivot longer
-socpol <- socpol %>% pivot_longer(
-  cols = !c(fips, year), 
-  values_to = "value", 
-  names_to = "variable_name") %>% filter(!is.na(value)) 
+socpol <- socpol %>% 
+  pivot_longer(
+    cols = !c(fips, county_name, state_name), 
+    names_to = "variable_name", 
+    values_to = "value")
 
-# Add topic area
-socpol <- socpol %>% mutate(
-  topic_area = case_when(
-    variable_name=="pvote" |
-      variable_name=="respn"| 
-      variable_name=="pc2s_publicvoiceparticipation" ~ "Population", 
-    variable_name=="nccs" |
-      variable_name=="assn" | 
-      variable_name=="pc1s_nonprofitsocialindustries" ~ "Community Resources"))
+# Add variables 
+socpol <- socpol %>% 
+  mutate(
+    year = case_when(
+      str_detect(variable_name, "^pc") ~ NA, 
+      TRUE ~ str_c("20", str_sub(variable_name, -2, -1), sep = "")), 
+    variable_name = case_when(
+      !is.na(year) ~ str_remove(variable_name, "\\d{2}$"), 
+      TRUE ~ variable_name), 
+    category = "Community Characteristics", 
+    topic_area = case_when(
+      variable_name %in% c("pvote", "respn", "pc2s_publicvoiceparticipation") ~ 
+        "Population", 
+      TRUE ~ "Community Resources")) %>% 
+  filter(!is.na(value)) 
 
+# Add meta data 
+meta_socpol <- socpol %>% 
+  select(category, topic_area, variable_name) %>% 
+  distinct()
 
+# Add meta variables 
+meta_socpol <- meta_socpol %>% 
+  mutate(
+    user_friendly_variable_name = case_when(
+      variable_name == "assn" ~ 
+        "Social establishments per 1,000 population", 
+      variable_name == "nccs" ~ 
+        "Nonprofit organizations per 1,000 population", 
+      variable_name == "pc1s_nonprofitsocialindustries" ~ 
+        "Social capital - Social establishments and nonprofits",
+      variable_name == "pc2s_publicvoiceparticipation" ~ 
+        "Social capital - Public voice and participation",
+      variable_name == "pvote" ~ 
+        "Voting, percent of eligible voters that voted",
+      variable_name == "respn" ~ 
+        "U.S. Population Census response rate, percent"), 
+    variable_definition = case_when(
+      variable_name == "assn" ~
+        "Number of social establishments per 1,000 population (includes religious, civic, business associations, political organizations, professional organizations, labor organizations, bowling centers, fitness and recreation centers, golf courses and country clubs, and sports teams and clubs)", 
+      variable_name == "nccs" ~ 
+        "Number of nonprofit organizations per 1,000 population", 
+      variable_name == "pc1s_nonprofitsocialindustries" ~ 
+        "Constructed index derived from a principal component analysis including  number of social establishments and nonprofits per capita",
+      variable_name == "pc2s_publicvoiceparticipation" ~ 
+        "Constructed index derived from a principal component analysis including public voice and participation",
+      variable_name == "pvote" ~ 
+        "Percent of eligible voters that voted",
+      variable_name == "respn" ~ 
+        "U.S. Population Census response rate, percent"), 
+    periodicity = case_when(
+      str_detect(variable_name, "^pc") ~ NA, 
+      TRUE ~ "yearly"),
+    aggregation = case_when(
+      variable_name %in% c("assn", "nccs") ~ "#/1,000", 
+      variable_name %in% c("pvote", "respn") ~ "percent", 
+      str_detect(variable_name, "pc") ~ "unitless"), 
+    format = case_when(
+      aggregation == "percent" ~ "percent", 
+      TRUE ~ "integer"),
+    keywords = "capitals|social capital|political capital", 
+    hashtags = "#socialcapital|#socialcap", 
+    chart_type1 = "BarChart", 
+    chart_type2 = NA, 
+    chart_axis_x1 = user_friendly_variable_name,
+    chart_axis_x2 = NA, 
+    chart_axis_y1 = NA, 
+    chart_axis_y2 = NA, 
+    source = case_when(
+      str_detect(variable_name, "^pc") ~ "Schmit et al., 2021", 
+      TRUE ~ 
+        "Rupasingha, Goetz, & Freshwater, 2006, with updates"),
+    url = case_when(
+      str_detect(variable_name, "^pc") ~ 
+        "https://www.sciencedirect.com/science/article/pii/S0306919221000981", 
+      TRUE ~ 
+        "https://nercrd.psu.edu/data-resources/county-level-measure-of-social-capital/"),
+    citation = case_when(
+      str_detect(variable_name, "^pc") ~ 
+        "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)", 
+      TRUE ~ "Rupasingha, A., S. J. Goetz, and D. Freshwater. 2006, with updates). The production of social capital in US counties. Journal of Socio-Economics, 35, 83-101. doi:10.1016/j.socec.2005.11.001"))
 ```
 
-### Bind all data and add county and state names
+## Combine all data and write to file
 
 ```{r}
 
 # Bind data
-community_wealth <- bind_rows(built, cultural, financial, human, natural, socpol)
-
-# Add state and county name
-fips_codes <- tidycensus::fips_codes %>% select(state_code, county_code, everything()) %>% unite("fips", state_code:county_code, sep = "") %>% select(-state) %>% rename(county_name = county)
-
-community_wealth <- left_join(community_wealth, fips_codes)
-
-# Add category
-community_wealth <- community_wealth %>% mutate(
-  category = case_when(
-    topic_area=="Agriculture" | 
-      topic_area=="Community Resources" | 
-      topic_area=="Financial" |
-      topic_area=="Infrastructure" | 
-      topic_area=="Natural" |
-      topic_area=="Population" ~ "Community Characteristics", 
-   topic_area=="Food Insecurity" ~ "Food Access", 
-   topic_area=="Food Processors" ~ "Processing & Distribution"))
+df_community_wealth <- bind_rows(built, cultural, financial, human, natural, socpol)
 
 # Re-order data
-community_wealth <- community_wealth %>% 
+df_community_wealth <- df_community_wealth %>% 
   mutate(
-    value_codes = NA) %>% 
+    value_codes = NA, 
+    year = as.character(year)) %>% 
   select(fips, county_name, state_name, category, 
          topic_area, year, variable_name, value, 
          value_codes)
 
 # Get list of years for meta data with a "|" between and add to metadata
-years <- community_wealth %>% 
+years <- df_community_wealth %>% 
   group_by(variable_name) %>%
   distinct(year) %>% 
-  summarise(years = paste(year, collapse = "|")) %>% 
+  summarise(years = paste(year, collapse = "|")) %>%
   mutate(
     years = case_when(
       years == "NA" ~ NA, 
       TRUE ~ years))
 
-# keep only distinct entries and add years 
-meta <- community_wealth %>% 
-  select(category, topic_area, variable_name) %>% 
-  distinct() %>%
-  left_join(years, by = "variable_name")
-
-# Create meta data file 
-meta_community_wealth <- meta %>%
+# Get metadata file for all data
+meta_community_wealth <- mget(ls(pattern = "^meta")) %>% 
+  keep(~is.data.frame(.x)) %>% 
+  bind_rows() %>% 
+  left_join(years) %>% 
   mutate(
-    source = "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and their association with food system efforts in rural and urban places. Food Policy 102(102119)", 
-    citation = "Schmit, Jablonski, Bonanno, and Johnson. 2021. Measuring stocks of community wealth and thier association with food system efforts in rural and urban places. Food Policy 102(102119)",
-    url = "https://www.sciencedirect.com/science/article/pii/S0306919221000981", 
-    last_update_date = "1/31/2024") %>%
-    select(`2 pager title`, category, topic_area, variable_name,
-           user_friendly_variable_name, variable_definition, 
-           years, periodicity, aggregation, format, 
-           keywords, hashtags, 
-           chart_type1, chart_type2, 
-           chart_axis_x1, chart_axis_x2, chart_axis_y1, 
-           chart_axis_y2, source, url, citation, last_update_date)
+    `2 pager title` = "Community Resources",
+    last_update_date = "1/30/24") %>%
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
 
 # Write to file
-write_csv(community_wealth, "community_wealth.csv")
+write_csv(df_community_wealth, "data_final/df_community_resources.csv")
+write_csv(meta_community_wealth, "data_final/meta_community_resources.csv")
+
+rm(list=ls())
 ```

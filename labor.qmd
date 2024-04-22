@@ -1,12 +1,11 @@
 ---
+title: Labor
 author: "Allison Bauman"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
 ```
-
-# Labor
 
 The Local and Regional Food Systems Data Warehouse contains data indicators related to [labor](https://localfoodeconomics.com/wp-content/uploads/2022/10/Labor-in-the-Food-System-Brief_final.pdf) in the food system that can help researchers, practitioners, and policymakers better understand how labor is structured with regards to employment, wages, working conditions, and outcomes at the county scale across the United States through a lens of equity along sectoral, racial, ethnic, gender, and citizenship dimensions.
 
@@ -25,8 +24,6 @@ Site users are encouraged to acknowledge the systemic factors that influence emp
 We use [tidycensus](https://walker-data.com/tidycensus/) to get state and county names by FIPS so they are uniform across all data sets.
 
 In the tidycensus data, there is no data for FIPS 02010 Aleutian Islands Census Area, Alaska. This FIPS is found in the Census of Agriculture. We add this fips to our county data based on the [Geographic Area Codes and Titles from the U.S. Bureau of Labor Statistics](https://www.bls.gov/cew/classifications/areas/qcew-area-titles.htm).
-
-Additionally, we use [2013 Rural-Urban Continuum Codes from the USDA Economic Research Service](https://www.ers.usda.gov/data-products/rural-urban-continuum-codes/) to better understand the rural-urban locations of these counties. The rural urban continuum code (RUCC) was used to divide producers into three categories of ruralness: metro (RUCC 7-9), metro-adjacent (RUCC 4-6), and nonmetro (RUCC 1-3) to account for the degree of urbanization and adjacency to a metro area.
 
 ```{r}
 library(tidyverse, quietly = TRUE)
@@ -65,7 +62,7 @@ county_state <- county_state %>%
 
 All data are from the [U.S. Bureau of Labor Statistics Quarterly Census of Employment and Wages](https://www.bls.gov/cew/downloadable-data-files.htm) (QCEW), By Industry, Annual Averages. We download data from 2012-2022. (Data are available starting in 1975, if you want data from prior years). [QCEW Field Layouts](https://www.bls.gov/cew/about-data/downloadable-file-layouts/annual/naics-based-annual-layout.htm) provides details on the data included in the raw data files.
 
-One challenge to using county-level QCEW data, particularly in rural counties and/or with industries for which there are few businesses in a county, is data that is not disclosed. It is important to distinguish between data that is missing, zero, and not disclosed. The number of establishments are always reported, but if the number of establishments is too small, then the remaining data (e.g., employment, wages) is coded as "0". These values are not true zeros but rather not disclosed. When we manipulate the data, we code any observation that is not disclosed (disclosure_code=="N") as NA. We then include a column in the final data frame called "value_codes" that has an N to indicate not disclosed. This allows us to distinguish between a true NA and not disclosed while still allowing for the data to be in a numeric format. For more information on data disclosure rules, see [Powers and Cohen, 2004](https://www.bls.gov/osmr/research-papers/2004/st040100.htm).
+One challenge to using county-level QCEW data, particularly in rural counties and/or with industries for which there are few businesses in a county, is data that is not disclosed. It is important to distinguish between data that is missing, zero, and not disclosed. The number of establishments are always reported, but if the number of establishments is too small, then the remaining data (e.g., employment, wages) is coded as "0". These values are not true zeros but rather not disclosed. When we manipulate the data, we code any observation that is not disclosed (disclosure_code=="N") as NA. We then include a column in the final data frame called "value_codes" that has an D to indicate not disclosed. This allows us to distinguish between a true NA and not disclosed while still allowing for the data to be in a numeric format. For more information on data disclosure rules, see [Powers and Cohen, 2004](https://www.bls.gov/osmr/research-papers/2004/st040100.htm).
 
 NAICS codes of interest:
 
@@ -296,9 +293,9 @@ meta_qcew <- meta_qcew %>%
   mutate(
     variable_definition = case_when(
       str_detect(variable_name, "total_annual_wages") ~ "Sum of the four quarterly total wage levels for a given year in the specific NAICS sector", 
-      str_detect(variable_name, "annual_avg_emplvl") ~ "Annual average of monthly employment levels for the specific NACIS sector for a given year", 
+      str_detect(variable_name, "annual_avg_emplvl") ~ "Annual average of monthly employment levels for the specific NAICS sector for a given year", 
       str_detect(variable_name, "annual_avg_wkly_wage") ~ "Average weekly wage based on the 12-monthly employment levels and total annual wage levels for the specific NAICS sector",
-      str_detect(variable_name, "annual_avg_estabs_count") ~ "Annual average of monthly employment levels for the specific NACIS sector for a given year"))
+      str_detect(variable_name, "annual_avg_estabs_count") ~ "Annual average of monthly employment levels for the specific NAICS sector for a given year"))
 
 # Add additional variables 
 meta_qcew <- meta_qcew %>% 
@@ -426,7 +423,7 @@ meta_occupation <- meta %>%
       variable_name == "farming_fishing_and_forestry_occupations_female" ~ 
         "Number of females in management occupations of farmers, ranchers, and other agricultural managers for the civilian employed population, 16 years and over",
       variable_name == "farming_fishing_and_forestry_occupations_male" ~ 
-        "Number of males in farming fishing and foresty occupations for the civilian employed population, 16 years and over",
+        "Number of males in farming fishing and forestry occupations for the civilian employed population, 16 years and over",
       variable_name == "food_preparation_and_serving_related_occupations_female" ~ 
         "Number of females in service occupations of food preparation, serving occupations except waiters/waitresses for the civilian employed population, 16 years and over",
       variable_name == "food_preparation_and_serving_related_occupations_male" ~ 
@@ -816,7 +813,7 @@ meta_farm_labor <- tibble (
                     "unpaid_labor_number_workers"),
   user_friendly_variable_name = c("Labor, hired, number of workers", 
                           "Labor, migrant, number of workers", 
-                          "Labor, unpaind, number of workers"),
+                          "Labor, unpaid, number of workers"),
   category = "Labor",
   topic_area = "Employment", 
   variable_definition = c("Number of hired farm labor workers", 
@@ -852,7 +849,7 @@ meta_labor <- mget(ls(pattern = "^meta")) %>%
   keep(~is.data.frame(.x)) %>% 
   bind_rows() %>% 
   mutate(
-    `2 pager title` = "Food Access", 
+    `2 pager title` = "Labor", 
     last_update_date = "1/30/24") %>%
   select(`2 pager title`, category, topic_area, variable_name,
          user_friendly_variable_name, variable_definition, 
@@ -867,13 +864,18 @@ df_labor <- mget(ls(pattern = "^df")) %>%
   keep(~is.data.frame(.x)) %>%
   bind_rows()
 
-# Drop rows with no data
+# Drop rows with no data and ensure data is in correct order
 df_labor <- df_labor %>%
-  filter(!(is.na(value) & is.na(value_codes)))
+  filter(!(is.na(value) & is.na(value_codes))) %>% 
+  mutate(
+    year = as.character(year)) %>% 
+  select(
+    fips, county_name, state_name, category, 
+    topic_area, year, variable_name, value, value_codes)
 
 # write to file 
 write_csv(meta_labor, "data_final/meta_labor.csv")
 write_csv(df_labor, "data_final/df_labor.csv")
 
-#rm(list = ls())
+rm(list = ls())
 ```
