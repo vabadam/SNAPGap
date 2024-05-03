@@ -1442,8 +1442,11 @@ df <- df %>%
     address = case_when(
       str_detect(name, "Blue Ribbon Farms") ~ "12880 Hwy 264", 
       str_detect(name, "Four Corners Compost") ~ "805 HWY 170", 
-      str_detect(name, "Hunt's Meat") ~ "658 Highway 64", 
-      TRUE ~ address))  
+      address == "3658 Highway 64, Waterflow" ~ "658 Highway 64", 
+      TRUE ~ address),
+    name = case_when(
+      address == "3658 Highway 64, Waterflow" ~ "Hunt's Meat Company", 
+      TRUE ~ name))  
 
 # Define variables 
 df <- df %>% 

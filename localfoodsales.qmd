@@ -334,13 +334,13 @@ Data notes:
 # Import 2017, 2022 data
 file_list <- fs::dir_ls(path = "data_raw/localfoodsales/qs.census")
 
-df <- file_list %>% 
+coa <- file_list %>% 
   map(~read_tsv(.,show_col_types = FALSE)) %>% 
   bind_rows() %>% 
   clean_names()
 
 # Select variables of interest, keep totals only
-df <- df %>% 
+df <- coa %>% 
   filter(domain_desc == "TOTAL" & 
            str_detect(short_desc, "WHOLESALE|RETAIL|VALUE-ADDED PRODUCTS|COMMODITY TOTALS - SALES|COMMODITY TOTALS - OPERATIONS WITH SALES|AG TOURISM & RECREATIONAL SERVICES") & 
            agg_level_desc %in% c("COUNTY", "NATIONAL", "STATE")) %>% 
@@ -484,7 +484,7 @@ df <- df %>%
     value_codes) 
 
 # Create metadata file
-meta_coa <- df %>% 
+meta_coa_local <- df %>% 
   group_by(variable_name, category, topic_area) %>% 
   count() %>% 
   select(-n) %>% 
@@ -594,26 +594,269 @@ meta_coa <- df %>%
 
 
 # Define data frame and make year a character
-df_coa <- df %>% 
+df_coa_local <- df %>% 
   mutate(
     year = as.character(year))
 
-rm(county, county_sf, county_state)
+```
+## Farm race/ethnicity
+
+We use the [2022 Census of Agriculture public data](https://www.nass.usda.gov/Publications/AgCensus/2022/index.php). Data is downloaded from [U.S. Department of Agriculture, National Agricultural Statistics Service (USDA NASS), Data, Large Datasets, qs.census2022.txt.gz](https://www.nass.usda.gov/datasets/).
+
+We provide race/ethnicity data by:
+
+-   Number of operations
+-   Number of producers
+-   Acres operated
+
+Data notes:
+
+-   \(D\) Withheld to avoid disclosing data for individual farms
+-   \(Z\) Less than half of the unit shown
+-   "PRODUCERS - NUMBER OF PRODUCERS" and "PRODUCERS, (ALL) - NUMBER OF PRODUCERS" are both used to provide information on the total number of producers. To match the published data, the variable
+-   "PRODUCERS, (ALL) - NUMBER OF PRODUCERS" is the total number of producers at the state- and county- level
+-   "PRODUCERS - NUMBER OF PRODUCERS" is the total number of producers at the national level
+
+```{r}
+
+# Select variables of interest
+varlist <- c(
+  "PRODUCERS, AMERICAN INDIAN OR ALASKA NATIVE - ACRES OPERATED", 
+  "PRODUCERS, AMERICAN INDIAN OR ALASKA NATIVE - NUMBER OF OPERATIONS", 
+  "PRODUCERS, AMERICAN INDIAN OR ALASKA NATIVE - NUMBER OF PRODUCERS",
+  "PRODUCERS, ASIAN - ACRES OPERATED", 
+  "PRODUCERS, ASIAN - NUMBER OF OPERATIONS", 
+  "PRODUCERS, ASIAN - NUMBER OF PRODUCERS",
+  "PRODUCERS, BLACK OR AFRICAN AMERICAN - ACRES OPERATED", 
+  "PRODUCERS, BLACK OR AFRICAN AMERICAN - NUMBER OF OPERATIONS", 
+  "PRODUCERS, BLACK OR AFRICAN AMERICAN - NUMBER OF PRODUCERS", 
+  "PRODUCERS, HISPANIC - ACRES OPERATED", 
+  "PRODUCERS, HISPANIC - NUMBER OF OPERATIONS", 
+  "PRODUCERS, HISPANIC - NUMBER OF PRODUCERS", 
+  "PRODUCERS, NATIVE HAWAIIAN OR OTHER PACIFIC ISLANDER - ACRES OPERATED", 
+  "PRODUCERS, NATIVE HAWAIIAN OR OTHER PACIFIC ISLANDER - NUMBER OF OPERATIONS", 
+  "PRODUCERS, NATIVE HAWAIIAN OR OTHER PACIFIC ISLANDER - NUMBER OF PRODUCERS", 
+ "PRODUCERS, WHITE - ACRES OPERATED", 
+ "PRODUCERS, WHITE - NUMBER OF OPERATIONS",
+ "PRODUCERS, WHITE - NUMBER OF PRODUCERS", 
+ "FARM OPERATIONS - ACRES OPERATED",
+ "FARM OPERATIONS - NUMBER OF OPERATIONS",
+ "PRODUCERS - NUMBER OF PRODUCERS", 
+ "PRODUCERS, (ALL) - NUMBER OF PRODUCERS")
+
+df <- coa %>% 
+  filter(short_desc %in% varlist & domain_desc == "TOTAL" &
+           (agg_level_desc == "NATIONAL" |
+                 agg_level_desc %in% c("COUNTY", "STATE"))) %>%
+  select(short_desc, agg_level_desc, state_fips_code, county_code, year, value)
+
+# Use "PRODUCERS, (ALL) - NUMBER OF PRODUCERS" for data at the state- and county- level and PRODUCERS - NUMBER OF PRODUCERS" for data at the national level
+df <- df %>% 
+  filter(case_when(
+    agg_level_desc != "NATIONAL" ~ short_desc != "PRODUCERS - NUMBER OF PRODUCERS", 
+    TRUE ~ short_desc != "PRODUCERS, (ALL) - NUMBER OF PRODUCERS"))
+
+# To be consistent with other data sets, change the US fips code of 99 to 00
+# Add fips 
+df <- df %>% 
+  mutate(
+    state_fips_code = case_when(
+      state_fips_code == "99" ~ "00", 
+      TRUE ~ state_fips_code), 
+    fips = case_when(
+      is.na(county_code) ~ state_fips_code, 
+      TRUE ~ str_c(state_fips_code, county_code)))
+
+# Create variable names, description and definition 
+df <- df %>% 
+  mutate(
+    short_desc = str_replace_all(short_desc, 
+                             "FARM OPERATIONS - |PRODUCERS - |PRODUCERS, \\(ALL\\) - ",
+                             "TOTAL, "), 
+    short_desc = str_to_title(str_remove_all(
+      short_desc, "PRODUCERS, ")), 
+    short_desc = str_replace_all(short_desc, " - ", ", "), 
+    short_desc = str_replace_all(short_desc, "Or", "or"),
+    short_desc = str_replace(short_desc, "Number Of Producers", 
+                                 "number of producers"), 
+    short_desc = str_replace(short_desc, "Number Of Operations", 
+                             "number of operations"), 
+    short_desc = str_replace(short_desc, "Acres Operated", 
+                             "acres operated"),
+    variable_description = short_desc, 
+      variable_name = str_to_lower(short_desc), 
+      variable_name = str_remove_all(variable_name, 
+                                      "of |or |,"), 
+      variable_name = str_replace(variable_name, 
+                                  "other pacific islander", "opi"),
+      variable_name = str_replace_all(variable_name, 
+                                      " ", "_"), 
+    variable_definition = case_when(
+      str_detect(variable_name, "hispanic") ~ "Hispanic of any race", 
+      str_detect(variable_name, "total") ~ NA, 
+      TRUE ~ "Race alone")) 
+
+# Keep information for metadata 
+meta_demo <- df %>% 
+  select(variable_name, variable_description, variable_definition) %>% 
+  distinct()
+
+# Keep columns of interest 
+df <- df %>% 
+  select(year, fips, variable_name, value)
+
+# Change value to numeric and add value codes
+df <- df %>% 
+  mutate(
+    value_codes = case_when(
+      value =="(D)" ~ "D", 
+      value == "(Z)" ~ "Z", 
+      TRUE ~ NA),
+    value = case_when(
+      value %in% c("(D)", "(Z)") ~ NA, 
+      TRUE ~ as.numeric(str_remove_all(value, ",")))) %>%
+  select(fips, year, variable_name, value, value_codes)
+
+## Add value codes for total local food sales variables
+value_codes <- df %>%
+  select(year, fips, variable_name, value_codes)
+
+## Calculate percentages of total for farms and sales 
+percent <- df %>% 
+  select(!value_codes) %>%
+  pivot_wider(
+    names_from = variable_name, 
+    values_from = value) %>% 
+  select(fips, year, starts_with("total"), everything()) %>% 
+  mutate(across(everything(), ~ replace_na(., 0))) %>%
+  mutate(across(ends_with("acres_operated"), ~ ./total_acres_operated, 
+                .names = "{.col}_pct")) %>% 
+  mutate(across(ends_with("number_operations"), ~./total_number_operations, 
+                .names = "{.col}_pct")) %>% 
+  mutate(across(ends_with("number_producers"), ~./total_number_producers, 
+                .names = "{.col}_pct")) %>%
+  pivot_longer(
+    cols = !c(fips, year), 
+    names_to = "variable_name", 
+    values_to = "value") %>%
+  filter(str_detect(variable_name, "_pct$") & 
+        !variable_name %in% c("total_acres_operated_pct", 
+                                 "total_number_operations_pct", 
+                                 "total_number_producers_pct"))
+    
+# Add value codes 
+percent <- percent %>% 
+  mutate(
+    variable_name = str_remove(variable_name, "_pct$"))
+
+value_codes <- df %>%
+      select(fips, variable_name, year, value_codes)
+
+percent <- left_join(percent, value_codes) %>% 
+  mutate(variable_name = str_c(variable_name, "_pct", sep = ""), 
+         value = case_when(
+           value_codes == "D" ~ NA, 
+           TRUE ~ value))
+
+df <- bind_rows(df, percent)
+rm(percent, value_codes)
+
+# Add state and county names
+df <- df %>% 
+  left_join(county_state) 
+
+# Add US as state name 
+df <- df %>% 
+  mutate(
+    state_name = case_when(
+      fips == "00" ~ "US", 
+      TRUE ~ state_name))
+  
+# Add additional variables 
+df <- df %>%
+  mutate(
+    category = "Demographics",
+    topic_area = "Agriculture") %>% 
+  select(
+    fips, county_name, state_name, 
+    category, topic_area, year, variable_name, value, 
+    value_codes) 
+
+# define data frame 
+df_demo <- df %>% 
+  mutate(year = as.character(year))
+
+# Create metadata file
+meta_demo_pct <- meta_demo %>% 
+  filter(
+    !str_detect(variable_name, "^total")) %>%
+  mutate(
+    variable_name = str_c(variable_name, "_pct"), 
+    variable_description = str_c(variable_description, " as a percent of total"))
+
+meta_demo <- bind_rows(meta_demo, meta_demo_pct)
+rm(meta_demo_pct)
+
+meta_demo<- meta_demo %>%
+  mutate(
+    category = "Demographics",
+    topic_area = "Agriculture", 
+    `2 pager title` = "Local Food Sales", 
+    v1 = str_to_sentence(str_replace(variable_description, 
+                     ".*, ", "")), 
+    v2 = str_replace(variable_description, ", .*", ""), 
+    v2 = case_when(
+      v2 == "Total" ~ tolower(v2), 
+      TRUE ~ v2), 
+    user_friendly_variable_name = str_c(v1, v2, sep = ", "), 
+    years = "2017|2022", 
+    periodicity = "Every 5 years",
+    aggregation	= case_when(
+      str_detect(variable_name, "_pct") ~ "percent",
+      TRUE ~ "count"), 
+    format = case_when(
+      str_detect(variable_name, "_pct") ~ "percent",
+      TRUE ~ "integer"), 
+    keywords = "USDA|NASS|COA|Census of Agriculture", 
+    hashtags = NA, 
+    chart_type1 = "BarChart", 
+    chart_type2	= NA, 
+    chart_axis_x1	= case_when(
+      str_detect(variable_name, "acres_operated$") ~ "Acres operated", 
+      str_detect(variable_name, "number_operations$") ~ "Number of operations", 
+      str_detect(variable_name, "number_producers$") ~ "Number of producers",
+      str_detect(variable_name, "acres_operated_pct$") ~ "Percent of all acres", 
+      str_detect(variable_name, "number_operations_pct$") ~ "Percent of all operations", 
+      str_detect(variable_name, "number_producers_pct$") ~ "Percent of all producers"), 
+    chart_axis_x2	= NA, 
+    chart_axis_y1	= NA, 
+    chart_axis_y2	= NA, 
+    source = "U.S. Department of Agriculture, National Agricultural Statistical Survey, Census of Agriculture", 
+    url = "https://www.nass.usda.gov/datasets/", 
+    citation	= "U.S. Department of Agriculture, National Agricultural Statistical Survey, Data, Large Datasets, qs.census2022.txt.gz, qs.census2017.txt.gz", 
+    last_update_date = "4/22/24") %>% 
+  select(`2 pager title`, category, topic_area, variable_name,
+         user_friendly_variable_name, variable_definition, 
+         years, periodicity, aggregation, format, 
+         keywords, hashtags, 
+         chart_type1, chart_type2, 
+         chart_axis_x1, chart_axis_x2, chart_axis_y1, 
+         chart_axis_y2, source, url, citation, last_update_date)
 
 ```
 
 ## Combine all data and put in final format
 
 ```{r}
-rm(df, meta)
+rm(df, meta, coa)
 
 # Combine all data  
 df_localfoodsales <- 
-  bind_rows(df_food_retail, df_coa)
+  bind_rows(df_food_retail, df_coa_local, df_demo)
 
 # Combine metadata
 meta_localfoodsales <- 
-  bind_rows(meta_food_retail, meta_coa) %>% 
+  bind_rows(meta_food_retail, meta_coa_local, meta_demo) %>% 
   select(
     `2 pager title`, category, topic_area, variable_name,
     user_friendly_variable_name, variable_definition, 

@@ -14,7 +14,7 @@ The initiative first began by reviewing the mission statements from national loc
 
 We will accept suggestions of data to add to our data repository and website. Please follow instructions, as described on [localfoodeconomics.com](https://localfoodeconomics.com/data/recommendations/), to submit a request to add data.
 
-Accepted data contributions will be added each year in July. Visit [localfoodeconomics.com](https://localfoodeconomics.com/data/recommendations/) for criteria used to accept or reject suggestions.
+Accepted data contributions will be added one time per year. Visit [localfoodeconomics.com](https://localfoodeconomics.com/data/recommendations/) for criteria used to accept or reject suggestions.
 
 ## Data and code
 
@@ -22,26 +22,30 @@ A detailed description of the project and all of the data, including code, can b
 
 All data associated with this project can be found in our [FAME Dropbox folder](https://www.dropbox.com/scl/fo/zpxmg4ka2j7iol1bxrtsn/h?dl=0&rlkey=vshhwvzb2ukpu9dvn06z14o5x). Data includes original data sets used and all final data that has been compiled. Links and description of the data are provided in the RMarkdown files. Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in this folder.
 
-Last update date: 4/22/2024
+Last update date: 5/03/2024
 
 ## Authors
 
--   Becca B. R. Jablonski
 -   Ashley Chaifetz
--   Abby Long
--   Allie Bauman
--   Anthony Coble
--   Brett Wolff
--   Dar Wolnik
+-   Becca B. R. Jablonski
+-   Allison Bauman
 -   Diana Broadaway
--   Ela Rausch
--   Hailey Edmondson
--   Hannah Leighton
--   Jairus Rossi
--   Joshua Stoll
 -   Libby Christensen
+-   Tony Coble
+-   Dar Wolnik
+-   Hailey Edmondson
 -   Mackenzie Gill
+-   Hannah Leighton
+-   Abby Long
+-   Cullen Naumoff
+-   Ela Rausch
+-   Jairus Rossi
 -   Megan Sankey
+-   Samantha Schaffstall
+-   Joshua Stoll
+-   Americo Vega-Labiosa
+-   Brett Wolff
+-   Darlene Wolnick
 -   Tim Woods
 
 ## License

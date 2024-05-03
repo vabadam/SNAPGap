@@ -4,7 +4,7 @@ author: "Allison Bauman"
 ---
 
 ```{r setup, include=FALSE}
-#knitr::opts_chunk$set(eval = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
 ```
 
 The Local and Regional Food Systems Data Warehouse contains data indicators related to [nutrition security and food access](https://localfoodeconomics.com/wp-content/uploads/2022/10/Nutrition-Security-and-Food-Access-Brief_final.pdf) that can help researchers, practitioners, and policymakers better understand which households and communities have reliable access to nutritious and affordable food, and where access might be limited.
@@ -2905,8 +2905,8 @@ meta_foodbanks <- tibble(
                             "Location of food banks"), 
     years = "2023", 
     periodicity = "unknown",
-    aggregation	= "count", 
-    format = "integer", 
+    aggregation	= c("count", "point"), 
+    format = c("integer", "point"), 
     keywords = "Excess food|Food insecurity", 
     hashtags = "#foodbank", 
     chart_type1 = "BarChart", 
@@ -2918,7 +2918,7 @@ meta_foodbanks <- tibble(
     source = "U.S. Environmental Protection Agency (EPA)", 
     url = "https://epa.maps.arcgis.com/home/item.html?id=72f42ebe8ff54da79093c23a586be718", 
     citation	= "U.S. Environmental Protection Agency (EPA), Excess Food Opportunities Map", 
-    last_update_date = "1/30/24") %>% 
+    last_update_date = "1/30/24") %>%
   select(`2 pager title`, category, topic_area, variable_name,
          user_friendly_variable_name, variable_definition, 
          years, periodicity, aggregation, format, 
