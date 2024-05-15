@@ -2,13 +2,32 @@
 
 This book will provide researchers with information on all of the data and code used to generate the data found in the [Data Warehouse](https://localfoodeconomics.com/data/access-the-data/) and the [Food and Agriculture Mapper and Explorer](https://localfoodeconomics.com/data/food-and-agriculture-data-explorer/). A detailed description of each data set is provided, including links to the original data files, and code used to manipulate data. All code and output files are also available on [GitHub](https://github.com/FoodSystemsModeling/DataWarehouse).
 
-All publicly-available original data sets are not on GitHub. Readers can access data sets by following the links provided in the code or they can be found in our [FAME Dropbox folder](https://www.dropbox.com/scl/fo/zpxmg4ka2j7iol1bxrtsn/h?dl=0&rlkey=vshhwvzb2ukpu9dvn06z14o5x). Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in the Dropbox folder.
+Readers can access raw and processed data can be found in our [FAME Dropbox folder](https://www.dropbox.com/sh/glpu4blo1y5qvfj/AAD3mc8jD1-VlIr47JVWF7sya?st=4qnsgs7f&dl=0). All processed data, in an easy-to-use format, is found in the ["data_final"](https://www.dropbox.com/scl/fo/gmdp6wguzo48vko13t0kf/ACKXYeI_3vDlXDDB0R5_voI?rlkey=bak20m9zqlkjzzfxqscs550p1&st=vab4htos&dl=0) folder. All raw data can be found in folders associated with each code chapter. Please reference the code for details on the raw data. Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is available in the [USDA Food and Nutrition Service (FNS) raw data and forms](https://www.dropbox.com/home/Food%20and%20Agriculture%20Mapper%20and%20Explorer%20(FAME)/USDA%20Food%20and%20Nutrition%20Service%20(FNS)%20raw%20data%20and%20forms).
 
 This document is one component in the creation of a Local and Regional Food Systems (LRFS) Data Warehouse to support thriving and informed local and regional food sectors. Teams of researchers and community partners reviewed and compiled available data using an equity lens into a single data warehouse to facilitate analysis and visualization.
+
+(Note: Data in the [FAME Dropbox folder](https://www.dropbox.com/scl/fo/zpxmg4ka2j7iol1bxrtsn/h?dl=0&rlkey=vshhwvzb2ukpu9dvn06z14o5x) and [GitHub](https://github.com/FoodSystemsModeling/DataWarehouse) was updated in April 2024 with the most recently available data as well as additional years in the past. Data available [Food and Agriculture Mapper and Explorer](https://localfoodeconomics.com/data/food-and-agriculture-data-explorer/) was created in April of 2023 and not updated.)
+
+## Using the processed data
+
+If you would like to use the processed data in your own research, see ["data_final"](https://www.dropbox.com/home/Food%20and%20Agriculture%20Mapper%20and%20Explorer%20(FAME)/data_final) folder. Data are organized based on the chapters in this book.
+
+-   All files starting with "meta" contain all metadata (i.e., data providing information about the data). To join metadata with data files, join on "variable_name".
+-   All files starting with "df" and not ending in "point" contain county level data.
+-   All files starting with "df" and ending with "point" contain point level data (i.e., addresses, latitude/longitude coordinates).
+-   All data of the same type (i.e., county, point, meta) have the same columns and can be joined by binding rows/stacking data.
 
 ## Data contributions
 
 We will accept suggestions of data to add to our data repository and website. Please follow instructions, as described on [localfoodeconomics.com](https://localfoodeconomics.com/data/recommendations/), to submit a request to add data.
+
+Data must have…
+
+1.  Transparent methodology for data collection
+2.  Efforts towards representativeness
+3.  National-level data collection
+
+Those data that are approved will be updated once per year during the annual data update.
 
 ## Acknowledgements
 

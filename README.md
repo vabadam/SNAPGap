@@ -20,7 +20,7 @@ Accepted data contributions will be added one time per year. Visit [localfoodeco
 
 A detailed description of the project and all of the data, including code, can be found in [U.S. Department of Agriculture, Agricultural Marketing Service: Data and Metrics](https://allison-bauman.quarto.pub/usda-ams-datametrics/). Code can also be found on the [FoodSystemsModeling Git Hub site](https://github.com/FoodSystemsModeling/DataWarehouse). This is not an active code base and we are not accepting contributions to the code. The code is made available for you to use in your own work if it is helpful.
 
-All data associated with this project can be found in our [FAME Dropbox folder](https://www.dropbox.com/scl/fo/zpxmg4ka2j7iol1bxrtsn/h?dl=0&rlkey=vshhwvzb2ukpu9dvn06z14o5x). Data includes original data sets used and all final data that has been compiled (located in data_final). Links and description of the raw data are provided in the code files. Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in this folder.
+All data associated with this project can be found in our [FAME Dropbox folder](https://www.dropbox.com/sh/glpu4blo1y5qvfj/AAD3mc8jD1-VlIr47JVWF7sya?st=4qnsgs7f&dl=0). Data includes original data sets used and all final data that has been compiled (located in data_final). Links and description of the raw data are provided in the code files. Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in this folder.
 
 Last update date: 5/03/2024
 
